@@ -16,9 +16,9 @@ var loadCmd = &cobra.Command{
 	Aliases: []string{"l"},
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-        if _, ok := os.LookupEnv("TMUX"); ok {
-            return fmt.Errorf("Please do not use this command in tmux")
-        }
+		if _, ok := os.LookupEnv("TMUX"); ok {
+			return fmt.Errorf("Please do not use this command in tmux")
+		}
 
 		session := args[0]
 
@@ -28,22 +28,22 @@ var loadCmd = &cobra.Command{
 			return err
 		}
 		sessions := string(sessionBytes)
-        if strings.Contains(sessions, session + ":") {
-            resultBytes, err := exec.Command("tmux", "attach", "-t", session).CombinedOutput()
-            result := string(resultBytes)
-            if err == nil {
+		if strings.Contains(sessions, session+":") {
+			resultBytes, err := exec.Command("tmux", "attach", "-t", session).CombinedOutput()
+			result := string(resultBytes)
+			if err == nil {
 				return nil
-            } else if !strings.HasPrefix(result, "can't find session:") {
-                return fmt.Errorf(result)
-            }
+			} else if !strings.HasPrefix(result, "can't find session:") {
+				return fmt.Errorf(result)
+			}
 		}
 
 		sessionConfig, ok := config.Config.Sessions[session]
-        if !ok {
+		if !ok {
 			return fmt.Errorf("Invalid session")
 		}
 
-        fmt.Printf("%v", sessionConfig)
+		fmt.Printf("%v", sessionConfig)
 
 		return nil
 	},
