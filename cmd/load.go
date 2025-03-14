@@ -23,13 +23,16 @@ var loadCmd = &cobra.Command{
 		session := args[0]
 
 		listSessionsCommand := exec.Command("tmux", "list-sessions")
+
 		sessionBytes, err := listSessionsCommand.Output()
 		if err != nil {
 			return err
 		}
 		sessions := string(sessionBytes)
 		if strings.Contains(sessions, session+":") {
-			resultBytes, err := exec.Command("tmux", "attach", "-t", session).CombinedOutput()
+			attachCommand := exec.Command("tmux", "attach", "-t", session)
+			attachCommand.Stdin = os.Stdin
+			resultBytes, err := attachCommand.CombinedOutput()
 			result := string(resultBytes)
 			if err == nil {
 				return nil
