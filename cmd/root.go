@@ -12,9 +12,9 @@ var (
 	rootCmd = &cobra.Command{
 		Use:   "piquel-cli",
 		Short: "Piquel's CLI",
-        PersistentPreRun: func(cmd *cobra.Command, args []string) {
-            config.LoadConfig(configPath)
-        },
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return config.LoadConfig(configPath)
+		},
 	}
 	configPath string
 )
@@ -32,5 +32,5 @@ func init() {
 		panic(err)
 	}
 
-	rootCmd.PersistentFlags().StringVar(&configPath, "config", fmt.Sprintf("%s/.config/piquel.yaml", userHomeDir), "config file (default is $HOME/.config/piquel.yaml)")
+	rootCmd.PersistentFlags().StringVar(&configPath, "config", fmt.Sprintf("%s/.config/piquel/config.yml", userHomeDir), "config file")
 }
