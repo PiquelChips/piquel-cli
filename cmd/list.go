@@ -16,6 +16,7 @@ var (
 		Aliases: []string{"ls"},
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+            // If no flag is specified 
 			if !tmuxFlag && !configFlag {
 				return listSessions(true, true)
 			}

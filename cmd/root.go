@@ -32,5 +32,5 @@ func init() {
 		panic(err)
 	}
 
-	rootCmd.PersistentFlags().StringVar(&configPath, "config", fmt.Sprintf("%s/.config/piquel/config.yml", userHomeDir), "config file")
+	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c", fmt.Sprintf("%s/.config/piquel/config.yml", userHomeDir), "config file")
 }
