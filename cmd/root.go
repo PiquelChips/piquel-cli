@@ -13,6 +13,9 @@ var (
 		Use:   "piquel",
 		Short: "Piquel's CLI",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+            if cmd.Parent().Name() == "completion" {
+                return nil
+            }
 			return config.LoadConfig(configPath)
 		},
 	}

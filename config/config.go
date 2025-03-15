@@ -31,5 +31,6 @@ func LoadConfig(configPath string) error {
 		}
 	}
 
+	configLoaded = true
 	return nil
 }
