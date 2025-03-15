@@ -3,22 +3,20 @@ package tmux
 import (
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 
 	"github.com/PiquelChips/piquel-cli/config"
 )
 
 func ListSessions() ([]string, error) {
-	listSessionsCommand := exec.Command("tmux", "list-sessions")
+	listSessionsCommand := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 
 	sessionBytes, err := listSessionsCommand.Output()
 	if err != nil {
 		return []string{}, err
 	}
 
-	regex := regexp.MustCompile("^[^:]+")
-	return regex.FindAllString(string(sessionBytes), -1), nil
+	return strings.Split(string(sessionBytes), "\n"), nil
 }
 
 func Attach(session string) (string, error) {
