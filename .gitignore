@@ -1,5 +1,5 @@
-# Go file
-go.sum
-
 # Config file
 config.yml
+
+# Generated nix files
+result
