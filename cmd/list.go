@@ -16,7 +16,10 @@ var listCmd = &cobra.Command{
 	Aliases: []string{"ls"},
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		sessions, _ := tmux.ListSessions()
+		sessions, err := tmux.ListSessions()
+        if err != nil {
+            return err
+        }
 
 		for session := range config.Config.Sessions {
 			sessions = append(sessions, session)

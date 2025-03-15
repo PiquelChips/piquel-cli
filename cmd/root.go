@@ -10,7 +10,7 @@ import (
 
 var (
 	rootCmd = &cobra.Command{
-		Use:   "piquel-cli",
+		Use:   "piquel",
 		Short: "Piquel's CLI",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			return config.LoadConfig(configPath)

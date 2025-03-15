@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -9,16 +10,15 @@ import (
 )
 
 func ListSessions() ([]string, error) {
-	listSessionsCommand := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
+    sessions, err := execTmuxReturn("list-sessions", "-F", "#{session_name}")
+    if err != nil {
+        if strings.HasPrefix(sessions, "no server running on") {
+            return []string{}, nil
+        }
+        return []string{}, fmt.Errorf("Failed to list sessions with error: %s\n", sessions)
+    }
 
-	sessionBytes, err := listSessionsCommand.Output()
-	if err != nil {
-		return []string{}, err
-	}
-
-	sessions := string(sessionBytes)
 	sessions = strings.Trim(sessions, "\n")
-
 	return strings.Split(sessions, "\n"), nil
 }
 
@@ -28,42 +28,43 @@ func Attach(session string) (string, error) {
 
 func NewSession(sessionName string, session *config.SessionConfig) error {
 	if err := execTmux("new-session", "-Ad", "-c", session.Root, "-s", sessionName); err != nil {
-		return err
+		return fmt.Errorf("Failed to create session with name %s\n", sessionName)
 	}
 
 	index, err := execTmuxReturn("list-windows", "-t", sessionName, "-F", "#{window_index}")
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to list tmux windows with error: %s\n", index)
 	}
 	index = strings.Trim(index, "\n")
 
-	for _, window := range session.Windows {
+	for index, window := range session.Windows {
 		if err := NewWindow(session.Root, window); err != nil {
-			return err
+			return fmt.Errorf("Failed to create windows %d with error: %s\n", index+1, err.Error())
 		}
 	}
 
 	if err := execTmux("kill-window", "-t", sessionName+":"+index); err != nil {
-		return err
+		return fmt.Errorf("Failed to kill first window\n")
 	}
 
 	if err := execTmux("select-window", "-t", sessionName+":"+index); err != nil {
-		return err
+		return fmt.Errorf("Failed to select first window\n")
 	}
 
-	_, err = Attach(sessionName)
-	return err
+    if result, err := Attach(sessionName); err != nil {
+        return fmt.Errorf("Failed to attach to session with error: %s\n", result)
+	}
+	return nil
 }
 
 func NewWindow(startDir string, window *config.WindowConfig) error {
-	err := execTmux("new-window", "-c", startDir)
-	if err != nil {
-		return err
+	if result, err := execTmuxReturn("new-window", "-c", startDir); err != nil {
+        return fmt.Errorf("Failed to create window with error: %s\n", result)
 	}
 
 	for _, command := range window.Commands {
-		if err := execTmux("send-keys", command, "Enter"); err != nil {
-			return err
+		if result, err := execTmuxReturn("send-keys", command, "Enter"); err != nil {
+            return fmt.Errorf("Failed to execute command \"%s\" with error: %s\n", command, result)
 		}
 	}
 
