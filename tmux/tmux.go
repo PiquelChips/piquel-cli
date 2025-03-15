@@ -8,11 +8,11 @@ import (
 	"github.com/PiquelChips/piquel-cli/config"
 )
 
-func ListSessions(ignoreError bool) ([]string, error) {
+func ListSessions() ([]string, error) {
 	listSessionsCommand := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 
 	sessionBytes, err := listSessionsCommand.Output()
-	if err != nil && !ignoreError {
+	if err != nil {
 		return []string{}, err
 	}
 

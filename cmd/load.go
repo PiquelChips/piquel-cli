@@ -23,7 +23,7 @@ var loadCmd = &cobra.Command{
 
 		session := args[0]
 
-		sessions, err := tmux.ListSessions(false)
+		sessions, err := tmux.ListSessions()
 		if err != nil {
 			return err
 		}
