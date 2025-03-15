@@ -12,11 +12,14 @@ func ListSessions(ignoreError bool) ([]string, error) {
 	listSessionsCommand := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 
 	sessionBytes, err := listSessionsCommand.Output()
-    if err != nil && !ignoreError {
+	if err != nil && !ignoreError {
 		return []string{}, err
 	}
 
-	return strings.Split(string(sessionBytes), "\n"), nil
+	sessions := string(sessionBytes)
+	sessions = strings.Trim(sessions, "\n")
+
+	return strings.Split(sessions, "\n"), nil
 }
 
 func Attach(session string) (string, error) {
