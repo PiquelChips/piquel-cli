@@ -3,10 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/PiquelChips/piquel-cli/config"
+	"github.com/PiquelChips/piquel-cli/tmux"
 	"github.com/spf13/cobra"
 )
 
@@ -22,18 +23,13 @@ var loadCmd = &cobra.Command{
 
 		session := args[0]
 
-		listSessionsCommand := exec.Command("tmux", "list-sessions")
-
-		sessionBytes, err := listSessionsCommand.Output()
+		sessions, err := tmux.ListSessions()
 		if err != nil {
 			return err
 		}
-		sessions := string(sessionBytes)
-		if strings.Contains(sessions, session+":") {
-			attachCommand := exec.Command("tmux", "attach", "-t", session)
-			attachCommand.Stdin = os.Stdin
-			resultBytes, err := attachCommand.CombinedOutput()
-			result := string(resultBytes)
+
+		if slices.Contains(sessions, session) {
+			result, err := tmux.Attach(session)
 			if err == nil {
 				return nil
 			} else if !strings.HasPrefix(result, "can't find session:") {
@@ -46,9 +42,7 @@ var loadCmd = &cobra.Command{
 			return fmt.Errorf("Invalid session")
 		}
 
-		fmt.Printf("%v", sessionConfig)
-
-		return nil
+		return tmux.NewSession(session, sessionConfig)
 	},
 }
 
