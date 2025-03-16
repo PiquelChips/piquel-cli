@@ -1,10 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-	"slices"
-
-	"github.com/PiquelChips/piquel-cli/config"
 	"github.com/PiquelChips/piquel-cli/tmux"
 	"github.com/spf13/cobra"
 )
@@ -16,11 +12,11 @@ var (
 		Aliases: []string{"ls"},
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-            // If no flag is specified 
+			// If no flag is specified
 			if !tmuxFlag && !configFlag {
-				return listSessions(true, true)
+				return tmux.ListSessions(true, true)
 			}
-			return listSessions(configFlag, tmuxFlag)
+			return tmux.ListSessions(configFlag, tmuxFlag)
 		},
 	}
 	tmuxFlag, configFlag bool
@@ -31,30 +27,4 @@ func init() {
 
 	listCmd.Flags().BoolVarP(&configFlag, "config", "c", true, "get sessions from config")
 	listCmd.Flags().BoolVarP(&tmuxFlag, "tmux", "t", true, "get sessions from tmux")
-}
-
-func listSessions(listConfig, listTmux bool) error {
-	sessions := []string{}
-	if listTmux {
-		tmuxSessions, err := tmux.ListSessions()
-		if err != nil {
-			return err
-		}
-		sessions = append(sessions, tmuxSessions...)
-	}
-
-	if listConfig {
-		for session := range config.Config.Sessions {
-			sessions = append(sessions, session)
-		}
-	}
-
-	slices.Sort(sessions)
-	sessions = slices.Compact(sessions)
-
-	for _, session := range sessions {
-		fmt.Printf("%s\n", session)
-	}
-
-	return nil
 }

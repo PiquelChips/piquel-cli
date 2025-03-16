@@ -4,19 +4,46 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"github.com/PiquelChips/piquel-cli/config"
 )
 
-func ListSessions() ([]string, error) {
-    sessions, err := execTmuxReturn("list-sessions", "-F", "#{session_name}")
-    if err != nil {
-        if strings.HasPrefix(sessions, "no server running on") || strings.HasPrefix(sessions, "error connecting to") {
-            return []string{}, nil
-        }
-        return []string{}, fmt.Errorf("Failed to list sessions with error: %s\n", sessions)
-    }
+func ListSessions(listConfig, listTmux bool) error {
+	sessions := []string{}
+	if listTmux {
+		tmuxSessions, err := ListTmuxSessions()
+		if err != nil {
+			return err
+		}
+		sessions = append(sessions, tmuxSessions...)
+	}
+
+	if listConfig {
+		for session := range config.Config.Sessions {
+			sessions = append(sessions, session)
+		}
+	}
+
+	slices.Sort(sessions)
+	sessions = slices.Compact(sessions)
+
+	for _, session := range sessions {
+		fmt.Printf("%s\n", session)
+	}
+
+	return nil
+}
+
+func ListTmuxSessions() ([]string, error) {
+	sessions, err := execTmuxReturn("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		if strings.HasPrefix(sessions, "no server running on") || strings.HasPrefix(sessions, "error connecting to") {
+			return []string{}, nil
+		}
+		return []string{}, fmt.Errorf("Failed to list sessions with error: %s\n", sessions)
+	}
 
 	sessions = strings.Trim(sessions, "\n")
 	return strings.Split(sessions, "\n"), nil
@@ -51,20 +78,20 @@ func NewSession(sessionName string, session *config.SessionConfig) error {
 		return fmt.Errorf("Failed to select first window\n")
 	}
 
-    if result, err := Attach(sessionName); err != nil {
-        return fmt.Errorf("Failed to attach to session with error: %s\n", result)
+	if result, err := Attach(sessionName); err != nil {
+		return fmt.Errorf("Failed to attach to session with error: %s\n", result)
 	}
 	return nil
 }
 
 func NewWindow(startDir string, window *config.WindowConfig) error {
 	if result, err := execTmuxReturn("new-window", "-c", startDir); err != nil {
-        return fmt.Errorf("Failed to create window with error: %s\n", result)
+		return fmt.Errorf("Failed to create window with error: %s\n", result)
 	}
 
 	for _, command := range window.Commands {
 		if result, err := execTmuxReturn("send-keys", command, "Enter"); err != nil {
-            return fmt.Errorf("Failed to execute command \"%s\" with error: %s\n", command, result)
+			return fmt.Errorf("Failed to execute command \"%s\" with error: %s\n", command, result)
 		}
 	}
 
