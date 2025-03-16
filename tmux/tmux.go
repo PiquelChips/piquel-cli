@@ -12,7 +12,7 @@ import (
 func ListSessions() ([]string, error) {
     sessions, err := execTmuxReturn("list-sessions", "-F", "#{session_name}")
     if err != nil {
-        if strings.HasPrefix(sessions, "no server running on") {
+        if strings.HasPrefix(sessions, "no server running on") || strings.HasPrefix(sessions, "error connecting to") {
             return []string{}, nil
         }
         return []string{}, fmt.Errorf("Failed to list sessions with error: %s\n", sessions)
