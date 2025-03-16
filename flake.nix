@@ -14,10 +14,13 @@
         {
             packages = rec {
                 piquel = pkgs.buildGoModule {
-                    pname = "piquel-cli";
+                    pname = "piquel";
                     version = "0.1.0";
                     src = ./.;
                     vendorHash = "sha256-sZUEzBxbButVYi8eFxyrqCQI51a8rUDXpvO1JUxSmjU=";
+                    postInstall = ''
+                        mv $out/bin/piquel-cli $out/bin/piquel
+                    '';
                 };
                 default = piquel;
             };
