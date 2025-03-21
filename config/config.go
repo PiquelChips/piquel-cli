@@ -26,7 +26,7 @@ func LoadConfig(configPath string) error {
 
 	for name, session := range Config.Sessions {
 		session.Root = utils.ExpandHome(session.Root)
-		if _, err := os.Stat(session.Root); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(session.Root); Config.ValidateSessionRoot && errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("Path %s of session %s does not exist: ", session.Root, name)
 		}
 	}
