@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/PiquelChips/piquel-cli/config"
+	"github.com/PiquelChips/piquel-cli/models"
 )
 
 func ListSessions(listConfig, listTmux bool) error {
@@ -53,7 +54,7 @@ func Attach(session string) (string, error) {
 	return execTmuxReturn("attach", "-t", session)
 }
 
-func NewSession(sessionName string, session *config.SessionConfig) error {
+func NewSession(sessionName string, session *models.SessionConfig) error {
 	if err := execTmux("new-session", "-Ad", "-c", session.Root, "-s", sessionName); err != nil {
 		return fmt.Errorf("Failed to create session with name %s\n", sessionName)
 	}
@@ -84,7 +85,7 @@ func NewSession(sessionName string, session *config.SessionConfig) error {
 	return nil
 }
 
-func NewWindow(startDir string, window *config.WindowConfig) error {
+func NewWindow(startDir string, window *models.WindowConfig) error {
 	if result, err := execTmuxReturn("new-window", "-c", startDir); err != nil {
 		return fmt.Errorf("Failed to create window with error: %s\n", result)
 	}

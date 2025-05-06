@@ -1,4 +1,4 @@
-package config
+package models
 
 type PiquelConfig struct {
 	ValidateSessionRoot bool                      `yaml:"validate_session_root"`

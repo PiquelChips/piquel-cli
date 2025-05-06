@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/PiquelChips/piquel-cli/models"
 	"github.com/PiquelChips/piquel-cli/utils"
 	"gopkg.in/yaml.v3"
 )
 
-var Config PiquelConfig
+var Config models.PiquelConfig
 var configLoaded bool = false
 
 func LoadConfig(configPath string) error {
