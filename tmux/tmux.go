@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/PiquelChips/piquel-cli/config"
 	"github.com/PiquelChips/piquel-cli/models"
+	"github.com/PiquelChips/piquel-cli/utils"
 )
 
 func ListSessions(listConfig, listTmux bool) error {
@@ -55,6 +57,10 @@ func Attach(session string) (string, error) {
 }
 
 func NewSession(sessionName string, session *models.SessionConfig) error {
+	if err := validateSession(session); err != nil {
+		return err
+	}
+
 	if err := execTmux("new-session", "-Ad", "-c", session.Root, "-s", sessionName); err != nil {
 		return fmt.Errorf("Failed to create session with name %s\n", sessionName)
 	}
@@ -110,4 +116,16 @@ func execTmuxReturn(args ...string) (string, error) {
 	command.Stdin = os.Stdin
 	result, err := command.CombinedOutput()
 	return string(result), err
+}
+
+func validateSession(session *models.SessionConfig) error {
+	session.Root = utils.ExpandHome(session.Root)
+	if _, err := os.Stat(session.Root); config.Config.ValidateSessionRoot && errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("Path %s does not exist", session.Root)
+	}
+
+	if len(session.Windows) < 1 {
+		return fmt.Errorf("Session must have at least one window")
+	}
+	return nil
 }
