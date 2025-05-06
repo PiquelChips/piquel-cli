@@ -57,7 +57,7 @@ func Attach(session string) (string, error) {
 }
 
 func NewSession(sessionName string, session *models.SessionConfig) error {
-	if err := validateSession(session); err != nil {
+	if err := validateSession(sessionName, session); err != nil {
 		return err
 	}
 
@@ -118,7 +118,11 @@ func execTmuxReturn(args ...string) (string, error) {
 	return string(result), err
 }
 
-func validateSession(session *models.SessionConfig) error {
+func validateSession(name string, session *models.SessionConfig) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("\"%s\" is not valid session name", name)
+	}
+
 	session.Root = utils.ExpandHome(session.Root)
 	if _, err := os.Stat(session.Root); config.Config.ValidateSessionRoot && errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("Path %s does not exist", session.Root)
