@@ -1,15 +1,14 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
-	"github.com/PiquelChips/piquel-cli/utils"
+	"github.com/PiquelChips/piquel-cli/models"
 	"gopkg.in/yaml.v3"
 )
 
-var Config PiquelConfig
+var Config models.PiquelConfig
 var configLoaded bool = false
 
 func LoadConfig(configPath string) error {
@@ -23,13 +22,6 @@ func LoadConfig(configPath string) error {
 	}
 
 	yaml.Unmarshal(configFile, &Config)
-
-	for name, session := range Config.Sessions {
-		session.Root = utils.ExpandHome(session.Root)
-		if _, err := os.Stat(session.Root); Config.ValidateSessionRoot && errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("Path %s of session %s does not exist: ", session.Root, name)
-		}
-	}
 
 	configLoaded = true
 	return nil

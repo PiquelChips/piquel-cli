@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/PiquelChips/piquel-cli/config"
+	"github.com/PiquelChips/piquel-cli/models"
+	"github.com/PiquelChips/piquel-cli/utils"
 )
 
 func ListSessions(listConfig, listTmux bool) error {
@@ -53,7 +56,12 @@ func Attach(session string) (string, error) {
 	return execTmuxReturn("attach", "-t", session)
 }
 
-func NewSession(sessionName string, session *config.SessionConfig) error {
+func NewSession(sessionName string, session *models.SessionConfig) error {
+	sessionName = strings.ReplaceAll(sessionName, ".", "_")
+	if err := validateSession(sessionName, session); err != nil {
+		return err
+	}
+
 	if err := execTmux("new-session", "-Ad", "-c", session.Root, "-s", sessionName); err != nil {
 		return fmt.Errorf("Failed to create session with name %s\n", sessionName)
 	}
@@ -84,7 +92,7 @@ func NewSession(sessionName string, session *config.SessionConfig) error {
 	return nil
 }
 
-func NewWindow(startDir string, window *config.WindowConfig) error {
+func NewWindow(startDir string, window *models.WindowConfig) error {
 	if result, err := execTmuxReturn("new-window", "-c", startDir); err != nil {
 		return fmt.Errorf("Failed to create window with error: %s\n", result)
 	}
@@ -109,4 +117,20 @@ func execTmuxReturn(args ...string) (string, error) {
 	command.Stdin = os.Stdin
 	result, err := command.CombinedOutput()
 	return string(result), err
+}
+
+func validateSession(name string, session *models.SessionConfig) error {
+	if strings.TrimSpace(name) == "" || strings.Contains(name, ".") {
+		return fmt.Errorf("\"%s\" is not valid session name", name)
+	}
+
+	session.Root = utils.ExpandHome(session.Root)
+	if _, err := os.Stat(session.Root); config.Config.ValidateSessionRoot && errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("Path %s does not exist", session.Root)
+	}
+
+	if len(session.Windows) < 1 {
+		return fmt.Errorf("Session must have at least one window")
+	}
+	return nil
 }

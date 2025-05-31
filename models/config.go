@@ -1,8 +1,9 @@
-package config
+package models
 
 type PiquelConfig struct {
 	ValidateSessionRoot bool                      `yaml:"validate_session_root"`
 	Sessions            map[string]*SessionConfig `yaml:"sessions"`
+	DefaultSession      []*WindowConfig           `yaml:"default_session"`
 }
 
 type SessionConfig struct {
