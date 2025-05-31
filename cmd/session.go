@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/PiquelChips/piquel-cli/config"
@@ -24,7 +25,15 @@ var sessionCmd = &cobra.Command{
 		sessionConfig := &models.SessionConfig{}
 		sessionConfig.Windows = config.Config.DefaultSession
 
-		if len(args) == 1 {
+		if len(args) == 0 {
+			command := exec.Command("pwd")
+			command.Stdin = os.Stdin
+			if result, err := command.CombinedOutput(); err != nil {
+				return err
+			} else {
+				sessionConfig.Root = strings.Trim(string(result), "\n")
+			}
+		} else if len(args) == 1 {
 			sessionConfig.Root = args[0]
 		}
 
