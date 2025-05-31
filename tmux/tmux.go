@@ -57,6 +57,7 @@ func Attach(session string) (string, error) {
 }
 
 func NewSession(sessionName string, session *models.SessionConfig) error {
+	sessionName = strings.ReplaceAll(sessionName, ".", "_")
 	if err := validateSession(sessionName, session); err != nil {
 		return err
 	}
@@ -119,7 +120,7 @@ func execTmuxReturn(args ...string) (string, error) {
 }
 
 func validateSession(name string, session *models.SessionConfig) error {
-	if strings.TrimSpace(name) == "" {
+	if strings.TrimSpace(name) == "" || strings.Contains(name, ".") {
 		return fmt.Errorf("\"%s\" is not valid session name", name)
 	}
 
