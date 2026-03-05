@@ -9,7 +9,7 @@ use crate::{
 
 /// CLI for personal system management
 #[derive(Parser, Debug)]
-#[command(name = "piquelctl")]
+#[command(name = "piquel")]
 #[command(about = "CLI for system utilities", long_about = None)]
 pub struct Cli {
     /// custom path to configuration
