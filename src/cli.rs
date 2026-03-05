@@ -1,11 +1,9 @@
+use clap::{Parser, Subcommand};
 use std::{error::Error, path::PathBuf};
 
-use clap::{Parser, Subcommand};
+use crate::config;
 
-use crate::{
-    SessionConfig, config,
-    tmux::{self, TmuxError},
-};
+mod sessions;
 
 /// CLI for personal system management
 #[derive(Parser, Debug)]
@@ -51,52 +49,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Commands::List {
             list_config,
             list_tmux,
-        } => {
-            if !list_tmux && !list_config {
-                tmux::list_sessions(true, true)?;
-            } else {
-                tmux::list_sessions(*list_config, *list_tmux)?;
-            }
-        }
-        Commands::Load { session } => {
-            tmux::err_in_tmux()?;
-
-            let sessions = tmux::list_tmux_sessions()?;
-
-            if sessions.contains(session) {
-                match tmux::attach(session) {
-                    Ok(_) => return Ok(()),
-                    Err(TmuxError::Command(ref msg)) if !msg.starts_with("can't find session:") => {
-                        return Err(msg.clone().into());
-                    }
-                    Err(_) => {}
-                }
-            }
-
-            let config = config::config();
-            let session_config = config.sessions.get(session).ok_or("Invalid session")?;
-            tmux::new_session(session, &session_config)?;
-        }
-        Commands::Session { path } => {
-            tmux::err_in_tmux()?;
-
-            let config = config::config();
-
-            let path: PathBuf = match path {
-                Some(path) => path.to_owned(),
-                None => std::env::current_dir()?,
-            };
-
-            let session = SessionConfig {
-                windows: config.default_session.clone(),
-                root: path,
-            };
-
-            let root = session.root.to_string_lossy();
-            let name_split: Vec<&str> = root.split("/").collect();
-            let session_name = name_split[name_split.len() - 1];
-            tmux::new_session(session_name, &session)?
-        }
-    };
-    Ok(())
+        } => sessions::list_sessions(*list_config, *list_tmux),
+        Commands::Load { session } => sessions::load_session(session),
+        Commands::Session { path } => sessions::session(path.clone()),
+    }
 }
