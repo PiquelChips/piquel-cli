@@ -37,7 +37,7 @@ in
 
                     windowConfigType = types.submodule {
                         options = {
-                            commnads = mkOption {
+                            commands = mkOption {
                                 type = types.listOf types.str;
                                 default = [];
                                 description = "List of commands to run in the window";
