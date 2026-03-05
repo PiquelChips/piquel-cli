@@ -86,6 +86,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
             let path = match path {
                 Some(path) => match path.to_str() {
+                    // TODO: remove when update root to use path
                     Some(path) => path.into(),
                     None => panic!("path is invalid UTF-8 str"),
                 },
@@ -94,7 +95,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
             let session = SessionConfig {
                 windows: config.default_session.clone(),
-                // TODO: remove when update root to use path
                 root: path,
             };
 
