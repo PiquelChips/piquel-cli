@@ -1,7 +1,4 @@
-use std::{
-    error::Error,
-    path::{Path, PathBuf},
-};
+use std::{error::Error, path::PathBuf};
 
 use clap::{Parser, Subcommand};
 
@@ -61,7 +58,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Commands::Load { session } => {
-            tmux::in_tmux()?;
+            tmux::err_in_tmux()?;
 
             let sessions = tmux::list_tmux_sessions()?;
 
@@ -80,7 +77,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             tmux::new_session(session, &session_config)?;
         }
         Commands::Session { path } => {
-            tmux::in_tmux()?;
+            tmux::err_in_tmux()?;
 
             let config = config::config();
 

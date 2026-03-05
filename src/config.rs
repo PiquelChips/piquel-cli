@@ -1,4 +1,7 @@
-use std::{path::Path, sync::OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use crate::Config;
 
@@ -9,8 +12,8 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Debug)]
 pub enum ConfigError {
-    AlreadyLoaded(String),
-    FileNotFound(String),
+    AlreadyLoaded,
+    FileNotFound(PathBuf),
     ParseError(serde_json::Error),
     Validation(String),
 }
@@ -18,11 +21,11 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConfigError::AlreadyLoaded(path) => {
-                write!(f, "Config has already been loaded from {path}")
+            ConfigError::AlreadyLoaded => {
+                write!(f, "Config has already been loaded")
             }
             ConfigError::FileNotFound(path) => {
-                write!(f, "Config file {path} does not exist")
+                write!(f, "Config file {path:?} does not exist")
             }
             ConfigError::ParseError(e) => write!(f, "Failed to parse config: {e}"),
             ConfigError::Validation(msg) => write!(f, "{msg}"),
@@ -37,7 +40,7 @@ impl std::error::Error for ConfigError {}
 /// cannot be read.
 pub fn load_config(config_path: &Path) -> Result<(), ConfigError> {
     if CONFIG.get().is_some() {
-        return Err(ConfigError::AlreadyLoaded(config_path.to_owned()));
+        return Err(ConfigError::AlreadyLoaded);
     }
 
     let config_file = std::fs::read_to_string(config_path)
@@ -52,9 +55,7 @@ pub fn load_config(config_path: &Path) -> Result<(), ConfigError> {
     }
 
     // `set` fails only if another thread raced us — treat that as already loaded.
-    CONFIG
-        .set(parsed)
-        .map_err(|_| ConfigError::AlreadyLoaded(config_path.to_owned()))
+    CONFIG.set(parsed).map_err(|_| ConfigError::AlreadyLoaded)
 }
 
 /// Returns a reference to the global config.

@@ -143,12 +143,17 @@ pub fn new_window(start_dir: &str, window: &WindowConfig) -> Result<(), TmuxErro
     Ok(())
 }
 
-pub fn in_tmux() -> Result<(), TmuxError> {
-    if std::env::var("TMUX").is_ok() {
-        Ok(())
-    } else {
+/// Will return an error we are in tmux
+pub fn err_in_tmux() -> Result<(), TmuxError> {
+    if in_tmux() {
         Err(TmuxError::InTmux)
+    } else {
+        Ok(())
     }
+}
+
+pub fn in_tmux() -> bool {
+    std::env::var("TMUX").is_ok()
 }
 
 fn exec_tmux(args: &[&str]) -> Result<(), TmuxError> {
