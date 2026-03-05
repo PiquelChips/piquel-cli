@@ -7,12 +7,13 @@ use clap::{Parser, Subcommand};
 #[command(name = "piquelctl")]
 #[command(about = "CLI for system utilities", long_about = None)]
 pub struct Cli {
-    /// Path to the Unix socket to connect to
+    /// custom path to configuration
     #[arg(
         short = 'c',
         long = "config",
         value_name = "path",
-        default_value = "/home/piquel/.config/piquel/config.yml",
+        // TODO: better default
+        default_value = "./example_config.json",
         global = true
     )]
     config_path: String,
@@ -35,9 +36,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::List => (),
-        Commands::Load { session } => (),
-        Commands::Session => (),
+        Commands::List => println!("Listing sessions"),
+        Commands::Load { session } => println!("Loading {session}"),
+        Commands::Session => println!("Creating new session"),
     };
     Ok(())
 }
