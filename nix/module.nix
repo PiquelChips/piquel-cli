@@ -1,9 +1,9 @@
-{ config, lib, pkgs, self, ... }:
+{ config, lib, pkgs, inputs, ... }:
 let
     cfg = config.programs.piquelcli;
 
     system = pkgs.stdenv.hostPlatform.system;
-    basePiquelCli = self.packages.${system}.default;
+    basePiquelCli = inputs.self.packages.${system}.default;
 
     settingsFormat = pkgs.formats.json { };
     configFile = settingsFormat.generate "piquel-cli.json" cfg.settings;
