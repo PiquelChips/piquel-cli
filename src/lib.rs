@@ -57,7 +57,7 @@ pub struct Config {
 }
 
 /// Replaces '~' with the contents of $HOME
-pub fn expand_home(path: &str) -> String {
+fn expand_home(path: &str) -> String {
     if path.starts_with('~') {
         if let Ok(home) = std::env::var("HOME") {
             return path.replacen('~', &home, 1);

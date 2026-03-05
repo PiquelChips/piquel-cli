@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 pub enum TmuxError {
     Io(io::Error),
     Command(String),
+    InTmux,
 }
 
 impl std::fmt::Display for TmuxError {
@@ -13,6 +14,7 @@ impl std::fmt::Display for TmuxError {
         match self {
             TmuxError::Io(e) => write!(f, "IO error: {e}"),
             TmuxError::Command(msg) => write!(f, "{msg}"),
+            TmuxError::InTmux => write!(f, "Please do not use this command in tmux"),
         }
     }
 }
@@ -137,6 +139,14 @@ pub fn new_window(start_dir: &str, window: &WindowConfig) -> Result<(), TmuxErro
     }
 
     Ok(())
+}
+
+pub fn in_tmux() -> Result<(), TmuxError> {
+    if std::env::var("TMUX").is_ok() {
+        Ok(())
+    } else {
+        Err(TmuxError::InTmux)
+    }
 }
 
 fn exec_tmux(args: &[&str]) -> Result<(), TmuxError> {
