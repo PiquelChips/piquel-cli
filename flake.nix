@@ -20,7 +20,7 @@
                     src = pkgs.lib.cleanSource ./.;
                     cargoLock.lockFile = ./Cargo.lock;
                     postInstall = ''
-                        mv $out/bin/piquel-cli $out/bin/piquel
+                        cp $out/bin/piquelcli $out/bin/piquel
                     '';
                 };
                 default = piquel;
