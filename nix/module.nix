@@ -1,4 +1,3 @@
-# nixos/module.nix
 {
     config,
     lib,
@@ -25,7 +24,7 @@ let
 in
 {
     options.programs.piquelcli = {
-        enable = lib.mkEnableOption "Enable piquelcli";
+        enable = lib.mkEnableOption "piquelcli";
 
         package = lib.mkOption {
             type = lib.types.package;
