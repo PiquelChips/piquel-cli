@@ -3,3 +3,7 @@ config.yml
 
 # Generated nix files
 result
+
+# Added by cargo
+
+/target
