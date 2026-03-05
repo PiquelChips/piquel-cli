@@ -10,14 +10,15 @@
     flake-utils.lib.eachDefaultSystem (system:
         let
             pkgs = import nixpkgs {inherit system;};
+            manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
         in
         {
             packages = rec {
-                piquel = pkgs.buildGoModule {
-                    pname = "piquel";
-                    version = "0.1.0";
-                    src = ./.;
-                    vendorHash = "sha256-sZUEzBxbButVYi8eFxyrqCQI51a8rUDXpvO1JUxSmjU=";
+                piquel = pkgs.rustPlatform.buildRustPackage {
+                    pname = manifest.name;
+                    version = manifest.version;
+                    src = pkgs.lib.cleanSource ./.;
+                    cargoLock.lockFile = ./Cargo.lock;
                     postInstall = ''
                         mv $out/bin/piquel-cli $out/bin/piquel
                     '';
