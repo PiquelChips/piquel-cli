@@ -82,13 +82,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
             let config = config::config();
 
-            let path = match path {
-                Some(path) => match path.to_str() {
-                    // TODO: remove when update root to use path
-                    Some(path) => path.into(),
-                    None => panic!("path is invalid UTF-8 str"),
-                },
-                None => std::env::var("PWD")?,
+            let path: PathBuf = match path {
+                Some(path) => path.to_owned(),
+                None => std::env::current_dir()?,
             };
 
             let session = SessionConfig {
@@ -96,7 +92,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 root: path,
             };
 
-            let name_split: Vec<&str> = session.root.split("/").collect();
+            let root = session.root.to_string_lossy();
+            let name_split: Vec<&str> = root.split("/").collect();
             let session_name = name_split[name_split.len() - 1];
             tmux::new_session(session_name, &session)?
         }

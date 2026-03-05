@@ -3,7 +3,10 @@ pub mod config;
 pub mod tmux;
 
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::config::ConfigError;
 
@@ -14,8 +17,7 @@ pub struct WindowConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
-    // TODO: use PathBuf instead of String
-    pub root: String,
+    pub root: PathBuf,
     pub windows: Vec<WindowConfig>,
 }
 
@@ -33,11 +35,19 @@ impl SessionConfig {
 
         self.root = expand_home(&self.root);
 
-        if validate_session_root && !Path::new(&self.root).exists() {
-            return Err(ConfigError::Validation(format!(
-                "Path {} does not exist",
-                self.root
-            )));
+        if validate_session_root {
+            if !self.root.exists() {
+                return Err(ConfigError::Validation(format!(
+                    "Path {:?} does not exist",
+                    self.root
+                )));
+            }
+            if !self.root.is_dir() {
+                return Err(ConfigError::Validation(format!(
+                    "Path {:?} is not a directory",
+                    self.root
+                )));
+            }
         }
 
         if self.windows.is_empty() {
@@ -58,11 +68,11 @@ pub struct Config {
 }
 
 /// Replaces '~' with the contents of $HOME
-fn expand_home(path: &str) -> String {
-    if path.starts_with('~') {
-        if let Ok(home) = std::env::var("HOME") {
-            return path.replacen('~', &home, 1);
+fn expand_home(path: &Path) -> PathBuf {
+    if let Ok(stripped) = path.strip_prefix("~") {
+        if let Some(home) = std::env::home_dir() {
+            return home.join(stripped);
         }
     }
-    path.to_owned()
+    path.to_path_buf()
 }

@@ -1,5 +1,6 @@
 use crate::{SessionConfig, WindowConfig, config};
 use std::io;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 #[derive(Debug)]
@@ -91,7 +92,7 @@ pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), Tm
         "new-session",
         "-Ad",
         "-c",
-        &session.root,
+        &session.root.to_string_lossy(),
         "-s",
         &session_name,
     ])
@@ -128,8 +129,8 @@ pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), Tm
 }
 
 /// Creates a new tmux window rooted at `start_dir` and sends its commands.
-pub fn new_window(start_dir: &str, window: &WindowConfig) -> Result<(), TmuxError> {
-    exec_tmux_return(&["new-window", "-c", start_dir])
+pub fn new_window(start_dir: &PathBuf, window: &WindowConfig) -> Result<(), TmuxError> {
+    exec_tmux_return(&["new-window", "-c", start_dir.to_str().unwrap()])
         .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
 
     for command in &window.commands {
