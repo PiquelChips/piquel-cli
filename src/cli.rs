@@ -1,8 +1,15 @@
-use std::error::Error;
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+};
 
 use clap::{Parser, Subcommand};
 
-use crate::{config, tmux};
+use crate::{
+    SessionConfig,
+    config::{self, CONFIG_PATH},
+    tmux::{self, TmuxError},
+};
 
 /// CLI for personal system management
 #[derive(Parser, Debug)]
@@ -13,11 +20,10 @@ pub struct Cli {
     #[arg(
         long = "config",
         value_name = "path",
-        // TODO: better default
-        default_value = "/home/piquel/.config/piquel/config.json",
+        default_value = CONFIG_PATH,
         global = true
     )]
-    config_path: String,
+    config_path: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -35,7 +41,7 @@ pub enum Commands {
     /// Load sessions
     Load { session: String },
     /// Creates a session with default config
-    Session,
+    Session { path: Option<PathBuf> },
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
@@ -54,8 +60,48 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 tmux::list_sessions(*list_config, *list_tmux)?;
             }
         }
-        Commands::Load { session } => println!("Loading {session}"),
-        Commands::Session => println!("Creating new session"),
+        Commands::Load { session } => {
+            tmux::in_tmux()?;
+
+            let sessions = tmux::list_tmux_sessions()?;
+
+            if sessions.contains(session) {
+                match tmux::attach(session) {
+                    Ok(_) => return Ok(()),
+                    Err(TmuxError::Command(ref msg)) if !msg.starts_with("can't find session:") => {
+                        return Err(msg.clone().into());
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            let config = config::config();
+            let session_config = config.sessions.get(session).ok_or("Invalid session")?;
+            tmux::new_session(session, &session_config)?;
+        }
+        Commands::Session { path } => {
+            tmux::in_tmux()?;
+
+            let config = config::config();
+
+            let path = match path {
+                Some(path) => match path.to_str() {
+                    Some(path) => path.into(),
+                    None => panic!("path is invalid UTF-8 str"),
+                },
+                None => std::env::var("PWD")?,
+            };
+
+            let session = SessionConfig {
+                windows: config.default_session.clone(),
+                // TODO: remove when update root to use path
+                root: path,
+            };
+
+            let name_split: Vec<&str> = session.root.split("/").collect();
+            let session_name = name_split[name_split.len() - 1];
+            tmux::new_session(session_name, &session)?
+        }
     };
     Ok(())
 }

@@ -1,6 +1,9 @@
-use std::sync::OnceLock;
+use std::{path::Path, sync::OnceLock};
 
 use crate::Config;
+
+// TODO: better default
+pub const CONFIG_PATH: &str = "/home/piquel/.config/piquel/config.json";
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
@@ -32,7 +35,7 @@ impl std::error::Error for ConfigError {}
 /// Loads the YAML config from `config_path` into the global `CONFIG`.
 /// Returns an error if the config has already been loaded or the file
 /// cannot be read.
-pub fn load_config(config_path: &str) -> Result<(), ConfigError> {
+pub fn load_config(config_path: &Path) -> Result<(), ConfigError> {
     if CONFIG.get().is_some() {
         return Err(ConfigError::AlreadyLoaded(config_path.to_owned()));
     }

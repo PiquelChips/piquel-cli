@@ -86,7 +86,7 @@ pub fn attach(session: &str) -> Result<String, TmuxError> {
 }
 
 /// Creates a new tmux session (and its windows), then attaches.
-pub fn new_session(session_name: &str, session: &mut SessionConfig) -> Result<(), TmuxError> {
+pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), TmuxError> {
     exec_tmux(&[
         "new-session",
         "-Ad",

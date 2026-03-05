@@ -14,6 +14,7 @@ pub struct WindowConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
+    // TODO: use PathBuf instead of String
     pub root: String,
     pub windows: Vec<WindowConfig>,
 }
