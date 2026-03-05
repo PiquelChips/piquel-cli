@@ -3,8 +3,7 @@ use std::{error::Error, path::PathBuf};
 use clap::{Parser, Subcommand};
 
 use crate::{
-    SessionConfig,
-    config::{self, CONFIG_PATH},
+    SessionConfig, config,
     tmux::{self, TmuxError},
 };
 
@@ -14,13 +13,8 @@ use crate::{
 #[command(about = "CLI for system utilities", long_about = None)]
 pub struct Cli {
     /// custom path to configuration
-    #[arg(
-        long = "config",
-        value_name = "path",
-        default_value = CONFIG_PATH,
-        global = true
-    )]
-    config_path: PathBuf,
+    #[arg(long = "config", value_name = "path", global = true)]
+    config_path: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -44,7 +38,14 @@ pub enum Commands {
 pub fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
-    config::load_config(&cli.config_path)?;
+    let config_path: &PathBuf = match &cli.config_path {
+        Some(path) => path,
+        None => &std::env::home_dir()
+            .unwrap()
+            .join(".config/piquel/config.json"),
+    };
+
+    config::load_config(config_path)?;
 
     match &cli.command {
         Commands::List {

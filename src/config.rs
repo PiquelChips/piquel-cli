@@ -5,9 +5,6 @@ use std::{
 
 use crate::Config;
 
-// TODO: better default
-pub const CONFIG_PATH: &str = "/home/piquel/.config/piquel/config.json";
-
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
 #[derive(Debug)]
