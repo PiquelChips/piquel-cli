@@ -20,10 +20,20 @@ let
                 makeWrapper ${pkgs.piquel}/bin/piquelcli $out/bin/piquel \
                     --add-flags "--config ${configFile}"
             '';
+
+    piquelcli = wrappedPiquel;
 in
 {
     options.programs.piquelcli = {
         enable = lib.mkEnableOption "Enable piquelcli";
+
+        package = lib.mkOption {
+            type = lib.types.package;
+            default = piquelcli;
+            defaultText = lib.literalExpression "pkgs.piquel-cli";
+            example = lib.literalExpression "pkgs.piquel-cli";
+        };
+
         settings = lib.mkOption {
             description = "The configuration being passed to the CLI";
             type = lib.types.submodule {
@@ -80,6 +90,6 @@ in
     };
 
     config = lib.mkIf cfg.enable {
-        environment.systemPackages = [ wrappedPiquel ];
+        environment.systemPackages = [ piquelcli ];
     };
 }
