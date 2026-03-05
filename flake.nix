@@ -7,11 +7,12 @@
     };
     
     outputs = { self, nixpkgs, flake-utils }: 
-    let
-        inherit (self) outputs;
-    in
+    {
+        nixosModules.default = import ./nix/module.nix;
+    } //
     flake-utils.lib.eachDefaultSystem (system:
         let
+            inherit (self) outputs;
             pkgs = import nixpkgs {inherit system;};
             manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
             piquelcli = pkgs.rustPlatform.buildRustPackage {
