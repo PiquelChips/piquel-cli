@@ -25,6 +25,13 @@
                 };
                 default = piquel;
             };
+            devShells.default = pkgs.mkShell {
+                inputsFrom = [ self.packages.${system}.default ];
+                packages = with pkgs; [
+                    cargo rustc rustfmt
+                    clippy rust-analyzer
+                ];
+            };
         }
     );
 }
