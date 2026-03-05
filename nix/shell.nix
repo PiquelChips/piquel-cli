@@ -1,6 +1,6 @@
-{ outputs, pkgs, system, ... }:
+{ pkgs, ... }:
 pkgs.mkShell {
-    inputsFrom = [ outputs.packages.${system}.default ];
+    inputsFrom = [ (pkgs.callPackage ./pkg.nix { }) ];
     packages = with pkgs; [
         cargo
         rustc

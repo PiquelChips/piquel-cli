@@ -1,10 +1,6 @@
-{ config, lib, pkgs, inputs, ... }:
+{ config, lib, pkgs, ... }:
 let
     cfg = config.programs.piquelcli;
-
-    system = pkgs.stdenv.hostPlatform.system;
-    basePiquelCli = inputs.self.packages.${system}.default;
-
     settingsFormat = pkgs.formats.json { };
     configFile = settingsFormat.generate "piquel-cli.json" cfg.settings;
 
@@ -14,7 +10,7 @@ let
                 nativeBuildInputs = [ pkgs.makeWrapper ];
             }
             ''
-                makeWrapper ${basePiquelCli}/bin/piquelcli $out/bin/piquel \
+                makeWrapper ${pkgs.callPackage ./pkg.nix { }}/bin/piquelcli $out/bin/piquel \
                     --add-flags "--config ${configFile}"
             '';
 

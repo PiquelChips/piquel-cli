@@ -14,13 +14,7 @@
         let
             inherit (self) outputs;
             pkgs = import nixpkgs {inherit system;};
-            manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
-            piquelcli = pkgs.rustPlatform.buildRustPackage {
-                pname = manifest.name;
-                version = manifest.version;
-                src = pkgs.lib.cleanSource ./.;
-                cargoLock.lockFile = ./Cargo.lock;
-            };
+            piquelcli = pkgs.callPackage ./nix/pkg.nix { };
         in
         {
             packages.default = piquelcli;
