@@ -2,6 +2,8 @@ use std::error::Error;
 
 use clap::{Parser, Subcommand};
 
+use crate::config;
+
 /// CLI for personal system management
 #[derive(Parser, Debug)]
 #[command(name = "piquelctl")]
@@ -34,6 +36,8 @@ pub enum Commands {
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
+
+    config::load_config(&cli.config_path)?;
 
     match &cli.command {
         Commands::List => println!("Listing sessions"),
