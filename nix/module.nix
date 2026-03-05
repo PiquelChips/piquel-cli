@@ -22,7 +22,7 @@ let
             '';
 in
 {
-    options.programs.piquel = {
+    options.programs.piquelcli = {
         enable = lib.mkEnableOption "Enable piquelcli";
         settings = lib.mkOption {
             description = "The configuration being passed to the CLI";
