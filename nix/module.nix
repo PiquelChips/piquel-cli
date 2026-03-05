@@ -55,7 +55,7 @@ in
                     sessionConfigType = types.submodule {
                         options = {
                             root = mkOption {
-                                type = types.path;
+                                type = types.str;
                                 description = "Root directory for the session.";
                             };
                             windows = mkOption {
