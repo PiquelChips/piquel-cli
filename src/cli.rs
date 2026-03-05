@@ -11,11 +11,10 @@ use crate::{config, tmux};
 pub struct Cli {
     /// custom path to configuration
     #[arg(
-        short = 'c',
         long = "config",
         value_name = "path",
         // TODO: better default
-        default_value = "./example_config.json",
+        default_value = "/home/piquel/.config/piquel/config.json",
         global = true
     )]
     config_path: String,
