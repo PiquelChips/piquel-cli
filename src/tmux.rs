@@ -1,4 +1,4 @@
-use crate::{Config, SessionConfig, WindowConfig};
+use crate::{SessionConfig, WindowConfig, config};
 use std::io;
 use std::process::{Command, Stdio};
 
@@ -28,7 +28,9 @@ impl From<io::Error> for TmuxError {
 }
 
 /// Lists sessions from tmux, the config, or both — sorted and deduplicated.
-pub fn list_sessions(list_config: bool, list_tmux: bool, config: &Config) -> Result<(), TmuxError> {
+pub fn list_sessions(list_config: bool, list_tmux: bool) -> Result<(), TmuxError> {
+    let config = config::config();
+
     let mut sessions: Vec<String> = Vec::new();
 
     if list_tmux {

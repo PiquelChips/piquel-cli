@@ -2,7 +2,7 @@ use std::error::Error;
 
 use clap::{Parser, Subcommand};
 
-use crate::config;
+use crate::{config, tmux};
 
 /// CLI for personal system management
 #[derive(Parser, Debug)]
@@ -27,7 +27,12 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// List all available sessions
-    List,
+    List {
+        #[arg(short = 'c')]
+        list_config: bool,
+        #[arg(short = 't')]
+        list_tmux: bool,
+    },
     /// Load sessions
     Load { session: String },
     /// Creates a session with default config
@@ -40,7 +45,16 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     config::load_config(&cli.config_path)?;
 
     match &cli.command {
-        Commands::List => println!("Listing sessions"),
+        Commands::List {
+            list_config,
+            list_tmux,
+        } => {
+            if !list_tmux && !list_config {
+                tmux::list_sessions(true, true)?;
+            } else {
+                tmux::list_sessions(*list_config, *list_tmux)?;
+            }
+        }
         Commands::Load { session } => println!("Loading {session}"),
         Commands::Session => println!("Creating new session"),
     };
