@@ -23,11 +23,7 @@
             };
         in
         {
-            packages = {
-                piquel = piquelcli;
-                piquelcli = piquelcli;
-                default = piquelcli;
-            };
+            packages.default = piquelcli;
             devShells.default = import ./nix/shell.nix { inherit outputs system pkgs; };
         }
     );
