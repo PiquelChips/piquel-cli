@@ -7,31 +7,18 @@
     };
     
     outputs = { self, nixpkgs, flake-utils }: 
+    {
+        nixosModules.default = import ./nix/module.nix;
+    } //
     flake-utils.lib.eachDefaultSystem (system:
         let
+            inherit (self) outputs;
             pkgs = import nixpkgs {inherit system;};
-            manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
+            piquelcli = pkgs.callPackage ./nix/pkg.nix { };
         in
         {
-            packages = rec {
-                piquel = pkgs.rustPlatform.buildRustPackage {
-                    pname = manifest.name;
-                    version = manifest.version;
-                    src = pkgs.lib.cleanSource ./.;
-                    cargoLock.lockFile = ./Cargo.lock;
-                    postInstall = ''
-                        cp $out/bin/piquelcli $out/bin/piquel
-                    '';
-                };
-                default = piquel;
-            };
-            devShells.default = pkgs.mkShell {
-                inputsFrom = [ self.packages.${system}.default ];
-                packages = with pkgs; [
-                    cargo rustc rustfmt
-                    clippy rust-analyzer
-                ];
-            };
+            packages.default = piquelcli;
+            devShells.default = import ./nix/shell.nix { inherit outputs system pkgs; };
         }
     );
 }
