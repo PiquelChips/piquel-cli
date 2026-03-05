@@ -66,13 +66,13 @@ in
                         description = "Named sessions, each with a root path and windows.";
                     };
 
-                    validateSessionRoot = mkOption {
+                    validate_session_root = mkOption {
                         type = types.bool;
                         default = false;
                         description = "Whetther to validate that the session root is an actual path";
                     };
 
-                    defaultSession = mkOption {
+                    default_session = mkOption {
                         type = types.listOf windowConfigType;
                         default = [];
                         description = "Default session to create with any root";
