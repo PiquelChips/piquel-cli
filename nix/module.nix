@@ -83,6 +83,6 @@ in
     };
 
     config = lib.mkIf cfg.enable {
-        environment.systemPackages = [ piquelcli ];
+        environment.systemPackages = [ cfg.package ];
     };
 }

@@ -32,7 +32,7 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// Loads the YAML config from `config_path` into the global `CONFIG`.
+/// Loads the JSON config from `config_path` into the global `CONFIG`.
 /// Returns an error if the config has already been loaded or the file
 /// cannot be read.
 pub fn load_config(config_path: &Path) -> Result<(), ConfigError> {
