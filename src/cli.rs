@@ -30,6 +30,7 @@ pub enum Commands {
     /// Load sessions
     Load { session: String },
     /// Creates a session with default config
+    #[command(alias = "s")]
     Session { path: Option<PathBuf> },
 }
 
