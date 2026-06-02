@@ -2,7 +2,7 @@ use std::error::Error;
 
 use crate::{config, fzf, git, tmux};
 
-pub fn list_projects() -> Result<(), Box<dyn Error>> {
+pub fn list_projects() {
     let config = config::config();
     let mut projects = config
         .projects
@@ -16,8 +16,6 @@ pub fn list_projects() -> Result<(), Box<dyn Error>> {
     for project in projects {
         println!("{project}");
     }
-
-    Ok(())
 }
 
 pub fn load_project(
@@ -41,16 +39,20 @@ pub fn load_project(
 
     if !project.path.exists() {
         return Err(format!(
-            "Project \"{}\" path {:?} does not exist; configured repository is {}",
-            project.name, project.path, project.repository
+            "Project \"{}\" path {} does not exist; configured repository is {}",
+            project.name,
+            project.path.display(),
+            project.repository
         )
         .into());
     }
 
     if !project.path.is_dir() {
         return Err(format!(
-            "Project \"{}\" path {:?} is not a directory; configured repository is {}",
-            project.name, project.path, project.repository
+            "Project \"{}\" path {} is not a directory; configured repository is {}",
+            project.name,
+            project.path.display(),
+            project.repository
         )
         .into());
     }
@@ -81,16 +83,20 @@ pub fn open_project_interactive(project_name: &str) -> Result<(), Box<dyn Error>
 
     if !project.path.exists() {
         return Err(format!(
-            "Project \"{}\" path {:?} does not exist; configured repository is {}",
-            project.name, project.path, project.repository
+            "Project \"{}\" path {} does not exist; configured repository is {}",
+            project.name,
+            project.path.display(),
+            project.repository
         )
         .into());
     }
 
     if !project.path.is_dir() {
         return Err(format!(
-            "Project \"{}\" path {:?} is not a directory; configured repository is {}",
-            project.name, project.path, project.repository
+            "Project \"{}\" path {} is not a directory; configured repository is {}",
+            project.name,
+            project.path.display(),
+            project.repository
         )
         .into());
     }

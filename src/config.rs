@@ -7,11 +7,16 @@ use crate::Config;
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
+/// Errors produced while loading or accessing the CLI config.
 #[derive(Debug)]
 pub enum ConfigError {
+    /// The process-global config was already initialized.
     AlreadyLoaded,
+    /// The configured JSON file could not be found or read.
     FileNotFound(PathBuf),
+    /// The JSON config could not be parsed.
     ParseError(serde_json::Error),
+    /// The parsed config failed semantic validation.
     Validation(String),
 }
 
@@ -22,7 +27,7 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "Config has already been loaded")
             }
             ConfigError::FileNotFound(path) => {
-                write!(f, "Config file {path:?} does not exist")
+                write!(f, "Config file {} does not exist", path.display())
             }
             ConfigError::ParseError(e) => write!(f, "Failed to parse config: {e}"),
             ConfigError::Validation(msg) => write!(f, "{msg}"),
@@ -32,9 +37,12 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// Loads the JSON config from `config_path` into the global `CONFIG`.
-/// Returns an error if the config has already been loaded or the file
-/// cannot be read.
+/// Loads the JSON config from `config_path` into the global config store.
+///
+/// # Errors
+///
+/// Returns an error if the config has already been loaded, the file cannot be
+/// read, the JSON cannot be parsed, or validation fails.
 pub fn load_config(config_path: &Path) -> Result<(), ConfigError> {
     if CONFIG.get().is_some() {
         return Err(ConfigError::AlreadyLoaded);
@@ -51,7 +59,10 @@ pub fn load_config(config_path: &Path) -> Result<(), ConfigError> {
 }
 
 /// Returns a reference to the global config.
-/// Panics if `load_config` has not been called yet.
+///
+/// # Panics
+///
+/// Panics if [`load_config`] has not been called successfully.
 pub fn config() -> &'static Config {
     CONFIG.get().expect("Config has not been loaded yet")
 }

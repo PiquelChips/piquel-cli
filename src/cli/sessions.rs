@@ -44,18 +44,18 @@ pub fn session(
     };
 
     if !root.exists() {
-        return Err(format!("Session path {root:?} does not exist").into());
+        return Err(format!("Session path {} does not exist", root.display()).into());
     }
 
     if !root.is_dir() {
-        return Err(format!("Session path {root:?} is not a directory").into());
+        return Err(format!("Session path {} is not a directory", root.display()).into());
     }
 
     let tmux_name = match name_override {
         Some(name) => name.to_owned(),
         None => root
             .file_name()
-            .ok_or_else(|| format!("Could not derive session name from path {root:?}"))?
+            .ok_or_else(|| format!("Could not derive session name from path {}", root.display()))?
             .to_string_lossy()
             .into_owned(),
     };

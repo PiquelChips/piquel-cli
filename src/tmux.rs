@@ -3,11 +3,16 @@ use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// Errors produced while invoking tmux.
 #[derive(Debug)]
 pub enum TmuxError {
+    /// The tmux process could not be spawned or observed.
     Io(io::Error),
+    /// tmux exited unsuccessfully or returned an unexpected response.
     Command(String),
+    /// The command cannot run from inside an existing tmux session.
     InTmux,
+    /// The requested tmux session name cannot be sanitized into a valid name.
     InvalidSessionName(String),
 }
 
@@ -32,7 +37,11 @@ impl From<io::Error> for TmuxError {
     }
 }
 
-/// Lists sessions from tmux, the config, or both — sorted and deduplicated.
+/// Lists sessions from tmux, the config, or both, sorted and deduplicated.
+///
+/// # Errors
+///
+/// Returns an error if tmux session listing fails.
 pub fn list_sessions(list_config: bool, list_tmux: bool) -> Result<(), TmuxError> {
     let config = config::config();
 
@@ -62,6 +71,11 @@ pub fn list_sessions(list_config: bool, list_tmux: bool) -> Result<(), TmuxError
 }
 
 /// Returns the names of all running tmux sessions.
+///
+/// # Errors
+///
+/// Returns an error if tmux fails for any reason other than having no running
+/// server.
 pub fn list_tmux_sessions() -> Result<Vec<String>, TmuxError> {
     match exec_tmux_return(&["list-sessions", "-F", "#{session_name}"]) {
         Ok(output) => {
@@ -88,11 +102,20 @@ pub fn list_tmux_sessions() -> Result<Vec<String>, TmuxError> {
 }
 
 /// Attaches to a running tmux session and returns its combined output.
+///
+/// # Errors
+///
+/// Returns an error if tmux cannot attach to the requested session.
 pub fn attach(session: &str) -> Result<String, TmuxError> {
     exec_tmux_return(&["attach", "-t", session])
 }
 
 /// Opens a tmux session for `root` using `template`, creating it when needed.
+///
+/// # Errors
+///
+/// Returns an error if the session name is invalid, tmux cannot create or
+/// configure the session, or attaching fails.
 pub fn open_session(
     tmux_name: &str,
     root: &Path,
@@ -150,6 +173,11 @@ pub fn open_session(
 }
 
 /// Creates a new tmux window rooted at `start_dir` and sends its commands.
+///
+/// # Errors
+///
+/// Returns an error if tmux cannot create the window or send one of the
+/// configured commands.
 pub fn new_window(
     session_name: &str,
     start_dir: &Path,
@@ -163,7 +191,7 @@ pub fn new_window(
         "-t",
         session_name,
         "-c",
-        start_dir.to_str().unwrap(),
+        &start_dir.to_string_lossy(),
     ])
     .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
 
@@ -180,7 +208,11 @@ pub fn new_window(
     Ok(window_id)
 }
 
-/// Will return an error we are in tmux
+/// Returns an error when the current process is already running inside tmux.
+///
+/// # Errors
+///
+/// Returns [`TmuxError::InTmux`] if the `TMUX` environment variable is set.
 pub fn err_in_tmux() -> Result<(), TmuxError> {
     if in_tmux() {
         Err(TmuxError::InTmux)
@@ -189,10 +221,14 @@ pub fn err_in_tmux() -> Result<(), TmuxError> {
     }
 }
 
+/// Returns whether the current process is running inside tmux.
+#[must_use]
 pub fn in_tmux() -> bool {
     std::env::var("TMUX").is_ok()
 }
 
+/// Sanitizes arbitrary text into a tmux-compatible session name.
+#[must_use]
 pub fn sanitize_session_name(input: &str) -> String {
     let mut sanitized = String::new();
     let mut last_was_underscore = false;
@@ -219,6 +255,11 @@ pub fn sanitize_session_name(input: &str) -> String {
     sanitized
 }
 
+/// Validates and sanitizes a tmux session name.
+///
+/// # Errors
+///
+/// Returns an error if `input` contains no valid tmux session-name characters.
 pub fn validated_session_name(input: &str) -> Result<String, TmuxError> {
     let trimmed = input.trim();
     let sanitized = sanitize_session_name(trimmed);

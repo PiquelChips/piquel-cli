@@ -3,11 +3,16 @@ use std::{
     process::{Command, Stdio},
 };
 
+/// Errors produced while running `fzf`.
 #[derive(Debug)]
 pub enum FzfError {
+    /// The `fzf` binary could not be found.
     MissingBinary,
+    /// Selection was cancelled by the user.
     Cancelled,
+    /// An IO operation failed while communicating with `fzf`.
     Io(io::Error),
+    /// The `fzf` process exited with an unexpected error.
     Command(String),
 }
 
@@ -30,6 +35,12 @@ impl From<io::Error> for FzfError {
     }
 }
 
+/// Presents `items` in `fzf` and returns the selected item, if any.
+///
+/// # Errors
+///
+/// Returns an error if `fzf` is missing, cannot be spawned, or exits with an
+/// unexpected failure.
 pub fn select<I>(items: I, prompt: &str) -> Result<Option<String>, FzfError>
 where
     I: IntoIterator<Item = String>,
@@ -108,17 +119,19 @@ mod tests {
     fn cancelled_selection_returns_none() {
         let fake_fzf = test_script(
             "cancelled-fzf",
-            r#"#!/bin/sh
+            r"#!/bin/sh
 exit 130
-"#,
+",
         );
 
         let selection = select_with_program(
-            fake_fzf.to_str().unwrap(),
+            fake_fzf
+                .to_str()
+                .expect("fake fzf path should be valid UTF-8"),
             vec!["one".to_owned(), "two".to_owned()],
             "piquel> ",
         )
-        .unwrap();
+        .expect("fake fzf should run");
 
         assert_eq!(selection, None);
     }
@@ -126,18 +139,21 @@ exit 130
     fn test_script(name: &str, content: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .expect("system time should be after UNIX_EPOCH")
             .as_nanos();
         let dir = std::env::temp_dir().join(format!("piquelcli-{name}-{unique}"));
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&dir).expect("test script directory should be created");
         let script = dir.join(name);
-        fs::write(&script, content).unwrap();
+        fs::write(&script, content).expect("test script should be written");
 
         #[cfg(unix)]
         {
-            let mut permissions = fs::metadata(&script).unwrap().permissions();
+            let mut permissions = fs::metadata(&script)
+                .expect("test script metadata should be readable")
+                .permissions();
             permissions.set_mode(0o755);
-            fs::set_permissions(&script, permissions).unwrap();
+            fs::set_permissions(&script, permissions)
+                .expect("test script permissions should be set");
         }
 
         script

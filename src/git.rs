@@ -4,21 +4,32 @@ use std::{
     process::Command,
 };
 
+/// A git worktree discovered from `git worktree list --porcelain`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Worktree {
+    /// Filesystem path to the worktree.
     pub path: PathBuf,
+    /// Local branch checked out by the worktree, if any.
     pub branch: Option<String>,
 }
 
+/// Errors produced while discovering git worktrees.
 #[derive(Debug)]
 pub enum GitError {
+    /// The git process could not be spawned or observed.
     Io(io::Error),
+    /// git exited unsuccessfully.
     Command(String),
+    /// The configured project path does not exist.
     MissingProjectPath(PathBuf),
+    /// No worktree exists for the requested branch.
     MissingWorktree {
+        /// Branch that was requested.
         branch: String,
+        /// Project path that was searched.
         project_path: PathBuf,
     },
+    /// git worktree output could not be parsed.
     Parse(String),
 }
 
@@ -26,18 +37,18 @@ impl std::fmt::Display for GitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GitError::Io(e) => write!(f, "IO error: {e}"),
-            GitError::Command(msg) => write!(f, "{msg}"),
+            GitError::Command(msg) | GitError::Parse(msg) => write!(f, "{msg}"),
             GitError::MissingProjectPath(path) => {
-                write!(f, "Project path {path:?} does not exist")
+                write!(f, "Project path {} does not exist", path.display())
             }
             GitError::MissingWorktree {
                 branch,
                 project_path,
             } => write!(
                 f,
-                "No local git worktree for branch \"{branch}\" exists under {project_path:?}"
+                "No local git worktree for branch \"{branch}\" exists under {}",
+                project_path.display()
             ),
-            GitError::Parse(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -50,6 +61,12 @@ impl From<io::Error> for GitError {
     }
 }
 
+/// Lists all git worktrees for `project_path`.
+///
+/// # Errors
+///
+/// Returns an error if `project_path` does not exist, git fails, or the
+/// porcelain output cannot be parsed.
 pub fn list_worktrees(project_path: &Path) -> Result<Vec<Worktree>, GitError> {
     if !project_path.exists() {
         return Err(GitError::MissingProjectPath(project_path.to_owned()));
@@ -75,6 +92,11 @@ pub fn list_worktrees(project_path: &Path) -> Result<Vec<Worktree>, GitError> {
     parse_worktrees(&combined)
 }
 
+/// Finds the worktree for `branch` under `project_path`.
+///
+/// # Errors
+///
+/// Returns an error if worktree listing fails or no worktree matches `branch`.
 pub fn find_worktree(project_path: &Path, branch: &str) -> Result<Worktree, GitError> {
     find_worktree_in(list_worktrees(project_path)?, project_path, branch)
 }
@@ -135,6 +157,8 @@ fn push_worktree(
     Ok(())
 }
 
+/// Returns whether `worktrees` includes a branch worktree beyond `project_path`.
+#[must_use]
 pub fn has_additional_worktrees(project_path: &Path, worktrees: &[Worktree]) -> bool {
     let branch_worktrees = worktrees
         .iter()
@@ -158,6 +182,8 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
+/// Returns sorted `(branch, path)` choices for branch worktrees.
+#[must_use]
 pub fn branch_worktree_choices(worktrees: &[Worktree]) -> Vec<(String, PathBuf)> {
     let mut choices = worktrees
         .iter()
@@ -184,7 +210,7 @@ branch refs/heads/feature/foo
 
 ";
 
-        let worktrees = parse_worktrees(output).unwrap();
+        let worktrees = parse_worktrees(output).expect("worktree output should parse");
 
         assert_eq!(
             worktrees,
@@ -210,7 +236,7 @@ detached
 
 ";
 
-        let worktrees = parse_worktrees(output).unwrap();
+        let worktrees = parse_worktrees(output).expect("worktree output should parse");
 
         assert_eq!(worktrees[0].branch, None);
     }
@@ -228,7 +254,7 @@ detached
 
 ";
 
-        let worktrees = parse_worktrees(output).unwrap();
+        let worktrees = parse_worktrees(output).expect("worktree output should parse");
         let found = find_worktree_in(worktrees, Path::new("/home/me/Projects/repo"), "main")
             .expect("main worktree should exist");
 
@@ -249,11 +275,11 @@ detached
 ";
 
         let err = find_worktree_in(
-            parse_worktrees(output).unwrap(),
+            parse_worktrees(output).expect("worktree output should parse"),
             Path::new("/home/me/Projects/repo"),
             "feature/foo",
         )
-        .unwrap_err();
+        .expect_err("missing branch should return an error");
 
         assert!(err.to_string().contains("feature/foo"));
     }

@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'nix/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'README.md'
+  pull_request:
+    paths-ignore:
+      - 'nix/**'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'README.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-${{ matrix.os }}"
+
+      - name: cargo check (default features)
+        run: cargo check --locked
+
+      - name: cargo check (no default features)
+        run: cargo check --locked --no-default-features
+
+      - name: cargo check (all features)
+        run: cargo check --locked --all-features
+
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-${{ matrix.os }}"
+
+      - name: Build debug
+        run: cargo build --locked
+
+      - name: Upload Debug Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: piquelcli-debug-${{ matrix.os }}
+          path: target/debug/piquelcli
+
+      - name: Build release
+        run: cargo build --locked --release
+
+      - name: Upload Release Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: piquelcli-release-${{ matrix.os }}
+          path: target/release/piquelcli
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "ci-${{ matrix.os }}"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cargo-nextest
+
+      - name: Test
+        run: cargo nextest run --locked --no-tests pass

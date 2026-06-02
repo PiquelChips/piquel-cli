@@ -1,7 +1,14 @@
+//! Data types and helpers for the `piquelcli` command-line tool.
+
+/// Command-line parsing and top-level dispatch.
 pub mod cli;
+/// JSON config loading and global config access.
 pub mod config;
+/// Interactive fuzzy selection helpers.
 pub mod fzf;
+/// Git worktree discovery helpers.
 pub mod git;
+/// Integration helpers for invoking tmux.
 pub mod tmux;
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +19,7 @@ use std::{
 
 use crate::config::ConfigError;
 
+/// Commands to send to a tmux window after creating it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WindowConfig {
@@ -19,6 +27,7 @@ pub struct WindowConfig {
     commands: Vec<String>,
 }
 
+/// Configuration for a tmux session template.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SessionConfig {
@@ -43,6 +52,7 @@ impl SessionConfig {
     }
 }
 
+/// Configuration for a repository-backed project.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
@@ -53,6 +63,11 @@ pub struct ProjectConfig {
 }
 
 impl ProjectConfig {
+    /// Returns the configured project name, or derives one from the repository URL.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the configured or derived name is not valid.
     pub fn resolved_name(&self) -> Result<String, ConfigError> {
         let name = match &self.name {
             Some(name) => name.clone(),
@@ -63,6 +78,11 @@ impl ProjectConfig {
         Ok(name)
     }
 
+    /// Returns the configured project path, or derives one under `projects_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the project name cannot be resolved.
     pub fn resolved_path(&self, projects_dir: &Path) -> Result<PathBuf, ConfigError> {
         match &self.path {
             Some(path) => Ok(expand_home(path)),
@@ -70,6 +90,8 @@ impl ProjectConfig {
         }
     }
 
+    /// Returns the project default session config, falling back to the global default.
+    #[must_use]
     pub fn resolved_default_session(&self, config: &Config) -> ProjectSessionConfig {
         self.default_session
             .clone()
@@ -77,13 +99,17 @@ impl ProjectConfig {
     }
 }
 
+/// A project's default session, either by template name or inline template.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ProjectSessionConfig {
+    /// Name of a global session template.
     Template(String),
+    /// Inline session template defined on the project.
     Inline(SessionConfig),
 }
 
+/// Complete JSON configuration for the CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -98,6 +124,12 @@ pub struct Config {
 }
 
 impl Config {
+    /// Validates config semantics and expands paths in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if session templates, project names, project paths, or
+    /// default-session references are invalid.
     pub fn validate_and_normalize(&mut self) -> Result<(), ConfigError> {
         self.projects_dir = expand_home(&self.projects_dir);
 
@@ -153,10 +185,14 @@ impl Config {
         Ok(())
     }
 
+    /// Returns the named global session template.
+    #[must_use]
     pub fn session_template(&self, name: &str) -> Option<&SessionConfig> {
         self.sessions.get(name)
     }
 
+    /// Returns a normalized project by name.
+    #[must_use]
     pub fn project(&self, name: &str) -> Option<ResolvedProject> {
         self.projects.iter().find_map(|project| {
             let resolved_name = project.resolved_name().ok()?;
@@ -173,6 +209,8 @@ impl Config {
         })
     }
 
+    /// Returns the session template that should be used for `project`.
+    #[must_use]
     pub fn project_session_template<'a>(
         &'a self,
         project: &'a ResolvedProject,
@@ -189,6 +227,7 @@ impl Config {
     }
 }
 
+/// Project configuration after name, path, and default session resolution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedProject {
     repository: String,
@@ -268,7 +307,9 @@ mod tests {
             default_session: None,
         });
 
-        config.validate_and_normalize().unwrap();
+        config
+            .validate_and_normalize()
+            .expect("config should validate");
 
         assert_eq!(config.projects_dir, home.join("Projects"));
         assert_eq!(config.projects[0].path, Some(home.join("src/repo")));
@@ -288,7 +329,12 @@ mod tests {
                 default_session: None,
             };
 
-            assert_eq!(project.resolved_name().unwrap(), expected);
+            assert_eq!(
+                project
+                    .resolved_name()
+                    .expect("project name should resolve"),
+                expected
+            );
         }
     }
 
@@ -364,8 +410,10 @@ mod tests {
             })),
         });
 
-        config.validate_and_normalize().unwrap();
-        let project = config.project("repo").unwrap();
+        config
+            .validate_and_normalize()
+            .expect("config should validate");
+        let project = config.project("repo").expect("project should resolve");
 
         assert!(matches!(
             project.default_session,
@@ -399,7 +447,9 @@ mod tests {
             default_session: None,
         });
 
-        config.validate_and_normalize().unwrap();
+        config
+            .validate_and_normalize()
+            .expect("config should validate");
 
         assert_eq!(
             config.projects[0].path,
@@ -420,7 +470,7 @@ mod tests {
                 }
             }"#,
         )
-        .unwrap_err();
+        .expect_err("old rooted session schema should be rejected");
 
         assert!(err.to_string().contains("unknown field `root`"));
     }
