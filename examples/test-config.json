@@ -35,7 +35,21 @@
     "projects": [
         {
             "repository": "git@github.com:PiquelChips/piquel-cli.git",
-            "default_session": "rust"
+            "default_session": {
+                "windows": [
+                    {
+                        "commands": [
+                            "vim ."
+                        ]
+                    },
+                    {
+                        "commands": [
+                            "git pull",
+                            "cargo clippy"
+                        ]
+                    }
+                ]
+            }
         },
         {
             "repository": "git@github.com:DirkEngine/DirkEngine.git",

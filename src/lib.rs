@@ -11,14 +11,14 @@ use std::{
 
 use crate::config::ConfigError;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WindowConfig {
     #[serde(default)]
     commands: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SessionConfig {
     windows: Vec<WindowConfig>,
@@ -48,7 +48,7 @@ pub struct ProjectConfig {
     repository: String,
     name: Option<String>,
     path: Option<PathBuf>,
-    default_session: Option<String>,
+    default_session: Option<ProjectSessionConfig>,
 }
 
 impl ProjectConfig {
@@ -69,11 +69,18 @@ impl ProjectConfig {
         }
     }
 
-    pub fn resolved_default_session<'a>(&'a self, config: &'a Config) -> &'a str {
+    pub fn resolved_default_session(&self, config: &Config) -> ProjectSessionConfig {
         self.default_session
-            .as_deref()
-            .unwrap_or(&config.default_session)
+            .clone()
+            .unwrap_or_else(|| ProjectSessionConfig::Template(config.default_session.clone()))
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ProjectSessionConfig {
+    Template(String),
+    Inline(SessionConfig),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,16 +126,26 @@ impl Config {
             project.name = Some(name);
             project.path = Some(path);
 
-            let template_name = project
+            match project
                 .default_session
-                .as_deref()
-                .unwrap_or(&global_default_session);
-
-            if !self.sessions.contains_key(template_name) {
-                return Err(ConfigError::Validation(format!(
-                    "Project \"{}\" references unknown session template \"{template_name}\"",
-                    project.name.as_deref().unwrap_or("<unknown>")
-                )));
+                .as_ref()
+                .unwrap_or(&ProjectSessionConfig::Template(
+                    global_default_session.clone(),
+                )) {
+                ProjectSessionConfig::Template(template_name) => {
+                    if !self.sessions.contains_key(template_name) {
+                        return Err(ConfigError::Validation(format!(
+                            "Project \"{}\" references unknown session template \"{template_name}\"",
+                            project.name.as_deref().unwrap_or("<unknown>")
+                        )));
+                    }
+                }
+                ProjectSessionConfig::Inline(session) => {
+                    session.validate(&format!(
+                        "Project \"{}\" inline default_session",
+                        project.name.as_deref().unwrap_or("<unknown>")
+                    ))?;
+                }
             }
         }
 
@@ -150,9 +167,24 @@ impl Config {
                 repository: project.repository.clone(),
                 name: resolved_name,
                 path: project.resolved_path(&self.projects_dir).ok()?,
-                default_session: project.resolved_default_session(self).to_owned(),
+                default_session: project.resolved_default_session(self),
             })
         })
+    }
+
+    pub fn project_session_template<'a>(
+        &'a self,
+        project: &'a ResolvedProject,
+        session_override: Option<&str>,
+    ) -> Option<&'a SessionConfig> {
+        if let Some(template_name) = session_override {
+            return self.session_template(template_name);
+        }
+
+        match &project.default_session {
+            ProjectSessionConfig::Template(template_name) => self.session_template(template_name),
+            ProjectSessionConfig::Inline(session) => Some(session),
+        }
     }
 }
 
@@ -161,7 +193,7 @@ pub struct ResolvedProject {
     repository: String,
     name: String,
     path: PathBuf,
-    default_session: String,
+    default_session: ProjectSessionConfig,
 }
 
 /// Replaces '~' with the contents of $HOME
@@ -311,7 +343,45 @@ mod tests {
             repository: "git@github.com:owner/repo.git".to_owned(),
             name: None,
             path: None,
-            default_session: Some("missing".to_owned()),
+            default_session: Some(ProjectSessionConfig::Template("missing".to_owned())),
+        });
+
+        assert!(config.validate_and_normalize().is_err());
+    }
+
+    #[test]
+    fn project_default_session_can_be_inline() {
+        let mut config = config_with_default();
+        config.projects.push(ProjectConfig {
+            repository: "git@github.com:owner/repo.git".to_owned(),
+            name: None,
+            path: None,
+            default_session: Some(ProjectSessionConfig::Inline(SessionConfig {
+                windows: vec![WindowConfig {
+                    commands: vec!["cargo check".to_owned()],
+                }],
+            })),
+        });
+
+        config.validate_and_normalize().unwrap();
+        let project = config.project("repo").unwrap();
+
+        assert!(matches!(
+            project.default_session,
+            ProjectSessionConfig::Inline(_)
+        ));
+    }
+
+    #[test]
+    fn inline_project_default_session_must_have_windows() {
+        let mut config = config_with_default();
+        config.projects.push(ProjectConfig {
+            repository: "git@github.com:owner/repo.git".to_owned(),
+            name: None,
+            path: None,
+            default_session: Some(ProjectSessionConfig::Inline(SessionConfig {
+                windows: vec![],
+            })),
         });
 
         assert!(config.validate_and_normalize().is_err());
