@@ -76,13 +76,8 @@ pub fn open_project_interactive(project_name: &str) -> Result<(), Box<dyn Error>
         .ok_or_else(|| format!("Project \"{project_name}\" is not configured"))?;
 
     let template = config
-        .session_template(&project.default_session)
-        .ok_or_else(|| {
-            format!(
-                "Session template \"{}\" is not configured",
-                project.default_session
-            )
-        })?;
+        .project_session_template(&project, None)
+        .ok_or_else(|| "Project default session template is not configured".to_owned())?;
 
     if !project.path.exists() {
         return Err(format!(
