@@ -32,10 +32,12 @@ pub fn load_project(
         .project(project_name)
         .ok_or_else(|| format!("Project \"{project_name}\" is not configured"))?;
 
-    let template_name = session_override.unwrap_or(&project.default_session);
     let template = config
-        .session_template(template_name)
-        .ok_or_else(|| format!("Session template \"{template_name}\" is not configured"))?;
+        .project_session_template(&project, session_override)
+        .ok_or_else(|| {
+            let template_name = session_override.unwrap_or("<project default>");
+            format!("Session template \"{template_name}\" is not configured")
+        })?;
 
     if !project.path.exists() {
         return Err(format!(
