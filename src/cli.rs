@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand};
 use std::{error::Error, path::PathBuf};
 
-use crate::config;
+use crate::{config, tmux};
 
+mod projects;
 mod sessions;
 
 /// CLI for personal system management
@@ -20,18 +21,36 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// List all available sessions
-    List {
-        #[arg(short = 'c')]
-        list_config: bool,
-        #[arg(short = 't')]
-        list_tmux: bool,
+    /// List running tmux sessions
+    List,
+    /// Manage configured projects
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommands,
     },
-    /// Load sessions
-    Load { session: String },
-    /// Creates a session with default config
+    /// Open an arbitrary directory with a session template
     #[command(alias = "s")]
-    Session { path: Option<PathBuf> },
+    Session {
+        path: Option<PathBuf>,
+        #[arg(short = 's', long = "session")]
+        session: Option<String>,
+        #[arg(short = 'n', long = "name")]
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ProjectCommands {
+    /// List configured projects
+    List,
+    /// Load a configured project
+    Load {
+        project: String,
+        #[arg(short = 's', long = "session")]
+        session: Option<String>,
+        #[arg(short = 't', long = "worktree")]
+        worktree: Option<String>,
+    },
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
@@ -47,11 +66,19 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     config::load_config(config_path)?;
 
     match &cli.command {
-        Commands::List {
-            list_config,
-            list_tmux,
-        } => sessions::list_sessions(*list_config, *list_tmux),
-        Commands::Load { session } => sessions::load_session(session),
-        Commands::Session { path } => sessions::session(path.clone()),
+        Commands::List => tmux::list_sessions(false, true).map_err(Into::into),
+        Commands::Project { command } => match command {
+            ProjectCommands::List => projects::list_projects(),
+            ProjectCommands::Load {
+                project,
+                session,
+                worktree,
+            } => projects::load_project(project, session.as_deref(), worktree.as_deref()),
+        },
+        Commands::Session {
+            path,
+            session,
+            name,
+        } => sessions::session(path.clone(), session.as_deref(), name.as_deref()),
     }
 }

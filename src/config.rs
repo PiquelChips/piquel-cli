@@ -44,12 +44,7 @@ pub fn load_config(config_path: &Path) -> Result<(), ConfigError> {
         .map_err(|_| ConfigError::FileNotFound(config_path.to_owned()))?;
 
     let mut parsed: Config = serde_json::from_str(&config_file).map_err(ConfigError::ParseError)?;
-
-    for (name, session) in parsed.sessions.iter_mut() {
-        // TODO: replace name in the HashMap
-        let session_name = name.replace('.', "_");
-        session.validate(&session_name, parsed.validate_session_root)?;
-    }
+    parsed.validate_and_normalize()?;
 
     // `set` fails only if another thread raced us — treat that as already loaded.
     CONFIG.set(parsed).map_err(|_| ConfigError::AlreadyLoaded)
