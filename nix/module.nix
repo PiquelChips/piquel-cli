@@ -47,35 +47,61 @@ in
 
                     sessionConfigType = types.submodule {
                         options = {
-                            root = mkOption {
-                                type = types.str;
-                                description = "Root directory for the session.";
-                            };
                             windows = mkOption {
                                 type = types.listOf windowConfigType;
                                 default = [];
-                                description = "Windows in this session.";
+                                description = "Windows in this session template.";
+                            };
+                        };
+                    };
+
+                    projectConfigType = types.submodule {
+                        options = {
+                            repository = mkOption {
+                                type = types.str;
+                                description = "Git repository URL for the project.";
+                            };
+                            name = mkOption {
+                                type = types.nullOr types.str;
+                                default = null;
+                                description = "Optional configured project name.";
+                            };
+                            path = mkOption {
+                                type = types.nullOr types.str;
+                                default = null;
+                                description = "Optional local project path.";
+                            };
+                            default_session = mkOption {
+                                type = types.nullOr types.str;
+                                default = null;
+                                description = "Optional default session template for this project.";
                             };
                         };
                     };
                 in
                 {
-                    sessions = mkOption {
-                        type = types.attrsOf sessionConfigType;
-                        default  = {};
-                        description = "Named sessions, each with a root path and windows.";
-                    };
-
-                    validate_session_root = mkOption {
-                        type = types.bool;
-                        default = false;
-                        description = "Whetther to validate that the session root is an actual path";
+                    projects_dir = mkOption {
+                        type = types.str;
+                        default = "~/Projects";
+                        description = "Default directory for local projects.";
                     };
 
                     default_session = mkOption {
-                        type = types.listOf windowConfigType;
+                        type = types.str;
+                        default = "default";
+                        description = "Global default session template name.";
+                    };
+
+                    sessions = mkOption {
+                        type = types.attrsOf sessionConfigType;
+                        default  = {};
+                        description = "Named reusable session templates.";
+                    };
+
+                    projects = mkOption {
+                        type = types.listOf projectConfigType;
                         default = [];
-                        description = "Default session to create with any root";
+                        description = "Configured projects.";
                     };
                 };
             };
