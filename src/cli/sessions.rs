@@ -31,7 +31,7 @@ pub fn load_session(session: &String) -> Result<(), Box<dyn Error>> {
 
     let config = config::config();
     let session_config = config.sessions.get(session).ok_or("Invalid session")?;
-    Ok(tmux::new_session(session, &session_config)?)
+    Ok(tmux::new_session(session, session_config)?)
 }
 
 pub fn session(path: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
@@ -40,7 +40,7 @@ pub fn session(path: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     let config = config::config();
 
     let path: PathBuf = match path {
-        Some(path) => path.to_owned(),
+        Some(path) => path.clone(),
         None => std::env::current_dir()?,
     };
 
@@ -50,7 +50,7 @@ pub fn session(path: Option<PathBuf>) -> Result<(), Box<dyn Error>> {
     };
 
     let root = session.root.to_string_lossy();
-    let name_split: Vec<&str> = root.split("/").collect();
+    let name_split: Vec<&str> = root.split('/').collect();
     let session_name = name_split[name_split.len() - 1];
     Ok(tmux::new_session(session_name, &session)?)
 }

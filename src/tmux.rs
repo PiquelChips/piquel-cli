@@ -1,12 +1,16 @@
 use crate::{SessionConfig, WindowConfig, config};
 use std::io;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// Errors produced while invoking tmux.
 #[derive(Debug)]
 pub enum TmuxError {
+    /// The tmux process could not be spawned or observed.
     Io(io::Error),
+    /// tmux exited unsuccessfully or returned an unexpected response.
     Command(String),
+    /// The command cannot run from inside an existing tmux session.
     InTmux,
 }
 
@@ -28,7 +32,11 @@ impl From<io::Error> for TmuxError {
     }
 }
 
-/// Lists sessions from tmux, the config, or both — sorted and deduplicated.
+/// Lists sessions from tmux, the config, or both, sorted and deduplicated.
+///
+/// # Errors
+///
+/// Returns an error if tmux session listing fails.
 pub fn list_sessions(list_config: bool, list_tmux: bool) -> Result<(), TmuxError> {
     let config = config::config();
 
@@ -56,6 +64,11 @@ pub fn list_sessions(list_config: bool, list_tmux: bool) -> Result<(), TmuxError
 }
 
 /// Returns the names of all running tmux sessions.
+///
+/// # Errors
+///
+/// Returns an error if tmux fails for any reason other than having no running
+/// server.
 pub fn list_tmux_sessions() -> Result<Vec<String>, TmuxError> {
     match exec_tmux_return(&["list-sessions", "-F", "#{session_name}"]) {
         Ok(output) => {
@@ -82,11 +95,20 @@ pub fn list_tmux_sessions() -> Result<Vec<String>, TmuxError> {
 }
 
 /// Attaches to a running tmux session and returns its combined output.
+///
+/// # Errors
+///
+/// Returns an error if tmux cannot attach to the requested session.
 pub fn attach(session: &str) -> Result<String, TmuxError> {
     exec_tmux_return(&["attach", "-t", session])
 }
 
 /// Creates a new tmux session (and its windows), then attaches.
+///
+/// # Errors
+///
+/// Returns an error if any tmux command used to create, configure, or attach to
+/// the session fails.
 pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), TmuxError> {
     exec_tmux(&[
         "new-session",
@@ -94,16 +116,14 @@ pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), Tm
         "-c",
         &session.root.to_string_lossy(),
         "-s",
-        &session_name,
+        session_name,
     ])
     .map_err(|_| {
         TmuxError::Command(format!("Failed to create session with name {session_name}"))
     })?;
 
-    let index = exec_tmux_return(&["list-windows", "-t", &session_name, "-F", "#{window_index}"])
-        .map_err(|e| {
-        TmuxError::Command(format!("Failed to list tmux windows with error: {e}"))
-    })?;
+    let index = exec_tmux_return(&["list-windows", "-t", session_name, "-F", "#{window_index}"])
+        .map_err(|e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")))?;
 
     let index = index.trim_matches('\n').to_owned();
 
@@ -119,7 +139,7 @@ pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), Tm
     exec_tmux(&["select-window", "-t", &format!("{session_name}:{index}")])
         .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
 
-    attach(&session_name).map_err(|_| {
+    attach(session_name).map_err(|_| {
         TmuxError::Command(format!(
             "Failed to attach to session with error: {session_name}"
         ))
@@ -129,8 +149,14 @@ pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), Tm
 }
 
 /// Creates a new tmux window rooted at `start_dir` and sends its commands.
-pub fn new_window(start_dir: &PathBuf, window: &WindowConfig) -> Result<(), TmuxError> {
-    exec_tmux_return(&["new-window", "-c", start_dir.to_str().unwrap()])
+///
+/// # Errors
+///
+/// Returns an error if tmux cannot create the window or send one of the
+/// configured commands.
+pub fn new_window(start_dir: &Path, window: &WindowConfig) -> Result<(), TmuxError> {
+    let start_dir = start_dir.to_string_lossy();
+    exec_tmux_return(&["new-window", "-c", &start_dir])
         .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
 
     for command in &window.commands {
@@ -144,7 +170,11 @@ pub fn new_window(start_dir: &PathBuf, window: &WindowConfig) -> Result<(), Tmux
     Ok(())
 }
 
-/// Will return an error we are in tmux
+/// Returns an error when the current process is already running inside tmux.
+///
+/// # Errors
+///
+/// Returns [`TmuxError::InTmux`] if the `TMUX` environment variable is set.
 pub fn err_in_tmux() -> Result<(), TmuxError> {
     if in_tmux() {
         Err(TmuxError::InTmux)
@@ -153,6 +183,8 @@ pub fn err_in_tmux() -> Result<(), TmuxError> {
     }
 }
 
+/// Returns whether the current process is running inside tmux.
+#[must_use]
 pub fn in_tmux() -> bool {
     std::env::var("TMUX").is_ok()
 }
