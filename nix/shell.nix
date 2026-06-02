@@ -7,5 +7,8 @@ pkgs.mkShell {
         rustfmt
         clippy
         rust-analyzer
+        fzf
+        git
+        tmux
     ];
 }

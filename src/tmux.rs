@@ -12,6 +12,8 @@ pub enum TmuxError {
     Command(String),
     /// The command cannot run from inside an existing tmux session.
     InTmux,
+    /// The requested tmux session name cannot be sanitized into a valid name.
+    InvalidSessionName(String),
 }
 
 impl std::fmt::Display for TmuxError {
@@ -20,6 +22,9 @@ impl std::fmt::Display for TmuxError {
             TmuxError::Io(e) => write!(f, "IO error: {e}"),
             TmuxError::Command(msg) => write!(f, "{msg}"),
             TmuxError::InTmux => write!(f, "Please do not use this command in tmux"),
+            TmuxError::InvalidSessionName(name) => {
+                write!(f, "\"{name}\" is not a valid tmux session name")
+            }
         }
     }
 }
@@ -48,8 +53,10 @@ pub fn list_sessions(list_config: bool, list_tmux: bool) -> Result<(), TmuxError
     }
 
     if list_config {
-        for session_name in config.sessions.keys() {
-            sessions.push(session_name.clone());
+        for project in &config.projects {
+            if let Ok(project_name) = project.resolved_name() {
+                sessions.push(project_name);
+            }
         }
     }
 
@@ -103,45 +110,62 @@ pub fn attach(session: &str) -> Result<String, TmuxError> {
     exec_tmux_return(&["attach", "-t", session])
 }
 
-/// Creates a new tmux session (and its windows), then attaches.
+/// Opens a tmux session for `root` using `template`, creating it when needed.
 ///
 /// # Errors
 ///
-/// Returns an error if any tmux command used to create, configure, or attach to
-/// the session fails.
-pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), TmuxError> {
-    exec_tmux(&[
-        "new-session",
-        "-Ad",
-        "-c",
-        &session.root.to_string_lossy(),
-        "-s",
-        session_name,
-    ])
-    .map_err(|_| {
-        TmuxError::Command(format!("Failed to create session with name {session_name}"))
-    })?;
+/// Returns an error if the session name is invalid, tmux cannot create or
+/// configure the session, or attaching fails.
+pub fn open_session(
+    tmux_name: &str,
+    root: &Path,
+    template: &SessionConfig,
+) -> Result<(), TmuxError> {
+    let tmux_name = validated_session_name(tmux_name)?;
 
-    let index = exec_tmux_return(&["list-windows", "-t", session_name, "-F", "#{window_index}"])
-        .map_err(|e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")))?;
-
-    let index = index.trim_matches('\n').to_owned();
-
-    for (i, window) in session.windows.iter().enumerate() {
-        new_window(&session.root, window).map_err(|e| {
-            TmuxError::Command(format!("Failed to create window {} with error: {e}", i + 1))
-        })?;
+    let sessions = list_tmux_sessions()?;
+    if sessions.contains(&tmux_name) {
+        attach(&tmux_name)?;
+        return Ok(());
     }
 
-    exec_tmux(&["kill-window", "-t", &format!("{session_name}:{index}")])
+    exec_tmux(&[
+        "new-session",
+        "-d",
+        "-c",
+        &root.to_string_lossy(),
+        "-s",
+        &tmux_name,
+    ])
+    .map_err(|_| TmuxError::Command(format!("Failed to create session with name {tmux_name}")))?;
+
+    let bootstrap_window =
+        exec_tmux_return(&["list-windows", "-t", &tmux_name, "-F", "#{window_id}"]).map_err(
+            |e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")),
+        )?;
+
+    let bootstrap_window = bootstrap_window.trim_matches('\n').to_owned();
+    let mut first_window = None;
+
+    for (i, window) in template.windows.iter().enumerate() {
+        let window_id = new_window(&tmux_name, root, window).map_err(|e| {
+            TmuxError::Command(format!("Failed to create window {} with error: {e}", i + 1))
+        })?;
+
+        first_window.get_or_insert(window_id);
+    }
+
+    exec_tmux(&["kill-window", "-t", &bootstrap_window])
         .map_err(|_| TmuxError::Command("Failed to kill first window".to_owned()))?;
 
-    exec_tmux(&["select-window", "-t", &format!("{session_name}:{index}")])
-        .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
+    if let Some(first_window) = first_window {
+        exec_tmux(&["select-window", "-t", &first_window])
+            .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
+    }
 
-    attach(session_name).map_err(|_| {
+    attach(&tmux_name).map_err(|_| {
         TmuxError::Command(format!(
-            "Failed to attach to session with error: {session_name}"
+            "Failed to attach to session with error: {tmux_name}"
         ))
     })?;
 
@@ -154,20 +178,34 @@ pub fn new_session(session_name: &str, session: &SessionConfig) -> Result<(), Tm
 ///
 /// Returns an error if tmux cannot create the window or send one of the
 /// configured commands.
-pub fn new_window(start_dir: &Path, window: &WindowConfig) -> Result<(), TmuxError> {
-    let start_dir = start_dir.to_string_lossy();
-    exec_tmux_return(&["new-window", "-c", &start_dir])
-        .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
+pub fn new_window(
+    session_name: &str,
+    start_dir: &Path,
+    window: &WindowConfig,
+) -> Result<String, TmuxError> {
+    let window_id = exec_tmux_return(&[
+        "new-window",
+        "-P",
+        "-F",
+        "#{window_id}",
+        "-t",
+        session_name,
+        "-c",
+        &start_dir.to_string_lossy(),
+    ])
+    .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
+
+    let window_id = window_id.trim_matches('\n').to_owned();
 
     for command in &window.commands {
-        exec_tmux_return(&["send-keys", command, "Enter"]).map_err(|e| {
+        exec_tmux_return(&["send-keys", "-t", &window_id, command, "Enter"]).map_err(|e| {
             TmuxError::Command(format!(
                 "Failed to execute command \"{command}\" with error: {e}"
             ))
         })?;
     }
 
-    Ok(())
+    Ok(window_id)
 }
 
 /// Returns an error when the current process is already running inside tmux.
@@ -187,6 +225,53 @@ pub fn err_in_tmux() -> Result<(), TmuxError> {
 #[must_use]
 pub fn in_tmux() -> bool {
     std::env::var("TMUX").is_ok()
+}
+
+/// Sanitizes arbitrary text into a tmux-compatible session name.
+#[must_use]
+pub fn sanitize_session_name(input: &str) -> String {
+    let mut sanitized = String::new();
+    let mut last_was_underscore = false;
+
+    for ch in input.trim().chars() {
+        let next = if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            ch
+        } else {
+            '_'
+        };
+
+        if next == '_' {
+            if last_was_underscore {
+                continue;
+            }
+            last_was_underscore = true;
+        } else {
+            last_was_underscore = false;
+        }
+
+        sanitized.push(next);
+    }
+
+    sanitized
+}
+
+/// Validates and sanitizes a tmux session name.
+///
+/// # Errors
+///
+/// Returns an error if `input` contains no valid tmux session-name characters.
+pub fn validated_session_name(input: &str) -> Result<String, TmuxError> {
+    let trimmed = input.trim();
+    let sanitized = sanitize_session_name(trimmed);
+    let has_valid_char = trimmed
+        .chars()
+        .any(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-');
+
+    if sanitized.is_empty() || !has_valid_char {
+        return Err(TmuxError::InvalidSessionName(input.to_owned()));
+    }
+
+    Ok(sanitized)
 }
 
 fn exec_tmux(args: &[&str]) -> Result<(), TmuxError> {
@@ -223,5 +308,25 @@ fn exec_tmux_return(args: &[&str]) -> Result<String, TmuxError> {
         Ok(combined)
     } else {
         Err(TmuxError::Command(combined))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitizes_tmux_session_names() {
+        assert_eq!(sanitize_session_name("project:branch"), "project_branch");
+        assert_eq!(sanitize_session_name("feature/foo"), "feature_foo");
+        assert_eq!(sanitize_session_name("feature///foo"), "feature_foo");
+        assert!(!sanitize_session_name("project:branch").contains(':'));
+    }
+
+    #[test]
+    fn invalid_tmux_session_names_fail_validation() {
+        assert!(validated_session_name("").is_err());
+        assert!(validated_session_name("   ").is_err());
+        assert!(validated_session_name("///").is_err());
     }
 }
