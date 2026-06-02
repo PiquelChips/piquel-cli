@@ -135,6 +135,38 @@ fn push_worktree(
     Ok(())
 }
 
+pub fn has_additional_worktrees(project_path: &Path, worktrees: &[Worktree]) -> bool {
+    let branch_worktrees = worktrees
+        .iter()
+        .filter(|worktree| worktree.branch.is_some())
+        .collect::<Vec<_>>();
+
+    branch_worktrees.len() > 1
+        || branch_worktrees
+            .iter()
+            .any(|worktree| !same_path(&worktree.path, project_path))
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+pub fn branch_worktree_choices(worktrees: &[Worktree]) -> Vec<(String, PathBuf)> {
+    let mut choices = worktrees
+        .iter()
+        .filter_map(|worktree| Some((worktree.branch.clone()?, worktree.path.clone())))
+        .collect::<Vec<_>>();
+    choices.sort_by(|(left, _), (right, _)| left.cmp(right));
+    choices
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +256,70 @@ detached
         .unwrap_err();
 
         assert!(err.to_string().contains("feature/foo"));
+    }
+
+    #[test]
+    fn worktree_picker_includes_all_branch_worktrees() {
+        let worktrees = vec![
+            worktree("/repo", Some("main")),
+            worktree("/repo-feature", Some("feature/foo")),
+        ];
+
+        let choices = branch_worktree_choices(&worktrees)
+            .into_iter()
+            .map(|(branch, _)| branch)
+            .collect::<Vec<_>>();
+
+        assert_eq!(choices, vec!["feature/foo", "main"]);
+    }
+
+    #[test]
+    fn detached_worktrees_are_excluded_from_picker_choices() {
+        let worktrees = vec![
+            worktree("/repo", Some("main")),
+            worktree("/repo-detached", None),
+        ];
+
+        let choices = branch_worktree_choices(&worktrees)
+            .into_iter()
+            .map(|(branch, _)| branch)
+            .collect::<Vec<_>>();
+
+        assert_eq!(choices, vec!["main"]);
+    }
+
+    #[test]
+    fn no_additional_branch_worktrees_falls_back_to_project_root() {
+        let project_path = Path::new("/repo");
+        let worktrees = vec![
+            worktree("/repo", Some("main")),
+            worktree("/repo-detached", None),
+        ];
+
+        assert!(!has_additional_worktrees(project_path, &worktrees));
+    }
+
+    #[test]
+    fn additional_branch_worktrees_trigger_worktree_picker() {
+        let project_path = Path::new("/repo");
+
+        assert!(has_additional_worktrees(
+            project_path,
+            &[
+                worktree("/repo", Some("main")),
+                worktree("/repo-feature", Some("feature/foo"))
+            ]
+        ));
+        assert!(has_additional_worktrees(
+            project_path,
+            &[worktree("/repo-feature", Some("feature/foo"))]
+        ));
+    }
+
+    fn worktree(path: &str, branch: Option<&str>) -> Worktree {
+        Worktree {
+            path: PathBuf::from(path),
+            branch: branch.map(str::to_owned),
+        }
     }
 }

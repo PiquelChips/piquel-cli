@@ -23,6 +23,8 @@ pub struct Cli {
 pub enum Commands {
     /// List running tmux sessions
     List,
+    /// Interactively pick a running tmux session or configured project
+    Pick,
     /// Manage configured projects
     Project {
         #[command(subcommand)]
@@ -67,6 +69,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     match &cli.command {
         Commands::List => tmux::list_sessions(false, true).map_err(Into::into),
+        Commands::Pick => sessions::pick(),
         Commands::Project { command } => match command {
             ProjectCommands::List => projects::list_projects(),
             ProjectCommands::Load {

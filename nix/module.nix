@@ -16,7 +16,14 @@ let
       }
       ''
         makeWrapper ${pkgs.callPackage ./pkg.nix { }}/bin/piquelcli $out/bin/piquel \
-            --add-flags "--config ${configFile}"
+            --add-flags "--config ${configFile}" \
+            --prefix PATH : ${
+              lib.makeBinPath [
+                pkgs.fzf
+                pkgs.git
+                pkgs.tmux
+              ]
+            }
       '';
 
   piquelcli = wrappedPiquel;

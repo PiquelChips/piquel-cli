@@ -54,6 +54,7 @@
         {
             "repository": "git@github.com:DirkEngine/DirkEngine.git",
             "name": "dirkengine",
+            "path": "~/Projects/DirkEngine",
             "default_session": "rust"
         }
     ]
