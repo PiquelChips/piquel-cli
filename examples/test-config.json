@@ -1,0 +1,46 @@
+{
+    "projects_dir": "~/Projects",
+    "default_session": "default",
+    "sessions": {
+        "default": {
+            "windows": [
+                {
+                    "commands": [
+                        "vim ."
+                    ]
+                },
+                {
+                    "commands": [
+                        "git pull"
+                    ]
+                }
+            ]
+        },
+        "rust": {
+            "windows": [
+                {
+                    "commands": [
+                        "vim ."
+                    ]
+                },
+                {
+                    "commands": [
+                        "git pull",
+                        "cargo clippy"
+                    ]
+                }
+            ]
+        }
+    },
+    "projects": [
+        {
+            "repository": "git@github.com:PiquelChips/piquel-cli.git",
+            "default_session": "rust"
+        },
+        {
+            "repository": "git@github.com:DirkEngine/DirkEngine.git",
+            "name": "dirkengine",
+            "default_session": "rust"
+        }
+    ]
+}
