@@ -2,7 +2,7 @@
 name = "piquelcli"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.91"
 authors = ["PiquelChips"]
 description = "A small CLI for personal tmux-backed machine and session management."
 license = "Apache-2.0"
