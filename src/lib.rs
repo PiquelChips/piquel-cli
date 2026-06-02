@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod config;
+pub mod fzf;
 pub mod git;
 pub mod tmux;
 
