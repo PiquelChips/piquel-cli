@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use std::{
     ffi::OsStr,
     fs,
@@ -64,7 +66,26 @@ fn piquel() -> Command {
     Command::new(env!("CARGO_BIN_EXE_piquelcli"))
 }
 
-fn assert_success(output: Output, stdout: &str, stderr: &str) {
+fn path_str(path: &Path) -> &str {
+    path.to_str().expect("test paths should be valid UTF-8")
+}
+
+fn shell_path() -> PathBuf {
+    if let Some(shell) = std::env::var_os("SHELL").map(PathBuf::from)
+        && shell.exists()
+    {
+        return shell;
+    }
+
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|path| path.join("sh"))
+        .find(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
+}
+
+fn assert_success(output: &Output, stdout: &str, stderr: &str) {
     assert!(
         output.status.success(),
         "expected success, got status {}\nstdout:\n{}\nstderr:\n{}",
@@ -76,7 +97,7 @@ fn assert_success(output: Output, stdout: &str, stderr: &str) {
     assert_eq!(String::from_utf8_lossy(&output.stderr), stderr);
 }
 
-fn assert_failure(output: Output, stderr_contains: &[&str]) {
+fn assert_failure(output: &Output, stderr_contains: &[&str]) {
     assert!(
         !output.status.success(),
         "expected failure, got success\nstdout:\n{}\nstderr:\n{}",
@@ -106,9 +127,9 @@ fn project_list_prints_sorted_configured_projects() {
     let temp = TestDir::new();
     let config = config_with_projects(&temp);
 
-    let output = run(["--config", config.to_str().unwrap(), "project", "list"]);
+    let output = run(["--config", path_str(&config), "project", "list"]);
 
-    assert_success(output, "alpha\nzeta\n", "");
+    assert_success(&output, "alpha\nzeta\n", "");
 }
 
 #[test]
@@ -116,9 +137,9 @@ fn missing_config_file_exits_with_clear_error() {
     let temp = TestDir::new();
     let config = temp.path().join("missing.json");
 
-    let output = run(["--config", config.to_str().unwrap(), "project", "list"]);
+    let output = run(["--config", path_str(&config), "project", "list"]);
 
-    assert_failure(output, &["Config file", "missing.json"]);
+    assert_failure(&output, &["Config file", "missing.json"]);
 }
 
 #[test]
@@ -137,9 +158,9 @@ fn invalid_config_schema_exits_with_parse_error() {
         }"#,
     );
 
-    let output = run(["--config", config.to_str().unwrap(), "project", "list"]);
+    let output = run(["--config", path_str(&config), "project", "list"]);
 
-    assert_failure(output, &["Failed to parse config", "unknown field `root`"]);
+    assert_failure(&output, &["Failed to parse config", "unknown field `root`"]);
 }
 
 #[test]
@@ -163,17 +184,11 @@ fn project_load_rejects_missing_project_path_before_opening_tmux_session() {
 
     let output = piquel()
         .env_remove("TMUX")
-        .args([
-            "--config",
-            config.to_str().unwrap(),
-            "project",
-            "load",
-            "alpha",
-        ])
+        .args(["--config", path_str(&config), "project", "load", "alpha"])
         .output()
         .expect("piquelcli should run");
 
-    assert_failure(output, &["Project \"alpha\" path", "does not exist"]);
+    assert_failure(&output, &["Project \"alpha\" path", "does not exist"]);
 }
 
 #[test]
@@ -186,13 +201,16 @@ fn list_prints_sorted_deduplicated_tmux_sessions() {
 
     fs::write(
         &tmux,
-        r#"#!/usr/bin/env sh
+        format!(
+            r#"#!{}
 if [ "$1" = "list-sessions" ]; then
     printf '%s\n' zeta alpha zeta
     exit 0
 fi
 exit 64
 "#,
+            path_str(&shell_path())
+        ),
     )
     .expect("fake tmux should be written");
 
@@ -210,9 +228,9 @@ exit 64
 
     let output = piquel()
         .env("PATH", path)
-        .args(["--config", config.to_str().unwrap(), "list"])
+        .args(["--config", path_str(&config), "list"])
         .output()
         .expect("piquelcli should run");
 
-    assert_success(output, "alpha\nzeta\n", "");
+    assert_success(&output, "alpha\nzeta\n", "");
 }
