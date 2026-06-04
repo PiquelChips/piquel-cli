@@ -2,37 +2,23 @@ use std::{
     io::{self, Write},
     process::{Command, Stdio},
 };
+use thiserror::Error;
 
 /// Errors produced while running `fzf`.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FzfError {
     /// The `fzf` binary could not be found.
+    #[error("fzf is not installed or not available in PATH")]
     MissingBinary,
     /// Selection was cancelled by the user.
+    #[error("fzf selection was cancelled")]
     Cancelled,
     /// An IO operation failed while communicating with `fzf`.
-    Io(io::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
     /// The `fzf` process exited with an unexpected error.
+    #[error("{0}")]
     Command(String),
-}
-
-impl std::fmt::Display for FzfError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FzfError::MissingBinary => write!(f, "fzf is not installed or not available in PATH"),
-            FzfError::Cancelled => write!(f, "fzf selection was cancelled"),
-            FzfError::Io(e) => write!(f, "IO error: {e}"),
-            FzfError::Command(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl std::error::Error for FzfError {}
-
-impl From<io::Error> for FzfError {
-    fn from(e: io::Error) -> Self {
-        FzfError::Io(e)
-    }
 }
 
 /// Presents `items` in `fzf` and returns the selected item, if any.

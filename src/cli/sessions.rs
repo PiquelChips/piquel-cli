@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
-    error::Error,
     path::{Path, PathBuf},
 };
+
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{cli::projects, config, fzf, tmux};
 
@@ -12,7 +13,7 @@ enum PickTarget {
     Project(String),
 }
 
-pub fn pick() -> Result<(), Box<dyn Error>> {
+pub fn pick() -> Result<()> {
     match pick_target()? {
         Some(PickTarget::TmuxSession(name)) => {
             tmux::err_in_tmux()?;
@@ -29,33 +30,33 @@ pub fn session(
     path: Option<PathBuf>,
     session_override: Option<&str>,
     name_override: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     tmux::err_in_tmux()?;
 
     let config = config::config();
     let template_name = session_override.unwrap_or(&config.default_session);
     let template = config
         .session_template(template_name)
-        .ok_or_else(|| format!("Session template \"{template_name}\" is not configured"))?;
+        .ok_or_else(|| anyhow!("Session template \"{template_name}\" is not configured"))?;
 
     let root = match path {
         Some(path) => expand_home(&path),
-        None => std::env::current_dir()?,
+        None => std::env::current_dir().context("Failed to determine current directory")?,
     };
 
     if !root.exists() {
-        return Err(format!("Session path {} does not exist", root.display()).into());
+        bail!("Session path {} does not exist", root.display());
     }
 
     if !root.is_dir() {
-        return Err(format!("Session path {} is not a directory", root.display()).into());
+        bail!("Session path {} is not a directory", root.display());
     }
 
     let tmux_name = match name_override {
         Some(name) => name.to_owned(),
         None => root
             .file_name()
-            .ok_or_else(|| format!("Could not derive session name from path {}", root.display()))?
+            .ok_or_else(|| anyhow!("Could not derive session name from path {}", root.display()))?
             .to_string_lossy()
             .into_owned(),
     };
@@ -73,7 +74,7 @@ fn expand_home(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn pick_target() -> Result<Option<PickTarget>, Box<dyn Error>> {
+fn pick_target() -> Result<Option<PickTarget>> {
     let config = config::config();
     let project_names = config
         .projects
@@ -89,7 +90,7 @@ fn pick_target() -> Result<Option<PickTarget>, Box<dyn Error>> {
     targets
         .remove(&selection)
         .map(Some)
-        .ok_or_else(|| format!("Selected unknown picker item \"{selection}\"").into())
+        .ok_or_else(|| anyhow!("Selected unknown picker item \"{selection}\""))
 }
 
 fn build_pick_targets<T, P>(

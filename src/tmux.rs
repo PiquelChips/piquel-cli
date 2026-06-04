@@ -2,39 +2,23 @@ use crate::{SessionConfig, WindowConfig, config};
 use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use thiserror::Error;
 
 /// Errors produced while invoking tmux.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum TmuxError {
     /// The tmux process could not be spawned or observed.
-    Io(io::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
     /// tmux exited unsuccessfully or returned an unexpected response.
+    #[error("{0}")]
     Command(String),
     /// The command cannot run from inside an existing tmux session.
+    #[error("Please do not use this command in tmux")]
     InTmux,
     /// The requested tmux session name cannot be sanitized into a valid name.
+    #[error("\"{0}\" is not a valid tmux session name")]
     InvalidSessionName(String),
-}
-
-impl std::fmt::Display for TmuxError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TmuxError::Io(e) => write!(f, "IO error: {e}"),
-            TmuxError::Command(msg) => write!(f, "{msg}"),
-            TmuxError::InTmux => write!(f, "Please do not use this command in tmux"),
-            TmuxError::InvalidSessionName(name) => {
-                write!(f, "\"{name}\" is not a valid tmux session name")
-            }
-        }
-    }
-}
-
-impl std::error::Error for TmuxError {}
-
-impl From<io::Error> for TmuxError {
-    fn from(e: io::Error) -> Self {
-        TmuxError::Io(e)
-    }
 }
 
 /// Lists sessions from tmux, the config, or both, sorted and deduplicated.

@@ -4,38 +4,26 @@ use std::{
 };
 
 use crate::Config;
+use thiserror::Error;
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
 /// Errors produced while loading or accessing the CLI config.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ConfigError {
     /// The process-global config was already initialized.
+    #[error("Config has already been loaded")]
     AlreadyLoaded,
     /// The configured JSON file could not be found or read.
+    #[error("Config file {} does not exist", .0.display())]
     FileNotFound(PathBuf),
     /// The JSON config could not be parsed.
+    #[error("Failed to parse config: {0}")]
     ParseError(serde_json::Error),
     /// The parsed config failed semantic validation.
+    #[error("{0}")]
     Validation(String),
 }
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigError::AlreadyLoaded => {
-                write!(f, "Config has already been loaded")
-            }
-            ConfigError::FileNotFound(path) => {
-                write!(f, "Config file {} does not exist", path.display())
-            }
-            ConfigError::ParseError(e) => write!(f, "Failed to parse config: {e}"),
-            ConfigError::Validation(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {}
 
 /// Loads the JSON config from `config_path` into the global config store.
 ///

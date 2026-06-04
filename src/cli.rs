@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
-use std::{error::Error, io, path::PathBuf};
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
 
 use crate::{config, tmux};
 
@@ -70,20 +72,23 @@ pub enum ProjectCommands {
 ///
 /// Returns an error if the default config path cannot be determined, the config
 /// cannot be loaded, or the selected command fails.
-pub fn run() -> Result<(), Box<dyn Error>> {
+pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     let config_path = match cli.config_path {
         Some(path) => path,
         None => std::env::home_dir()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory not found"))?
+            .context("home directory not found")?
             .join(".config/piquel/config.json"),
     };
 
     config::load_config(&config_path)?;
 
     match &cli.command {
-        Commands::List => tmux::list_sessions(false, true).map_err(Into::into),
+        Commands::List => {
+            tmux::list_sessions(false, true)?;
+            Ok(())
+        }
         Commands::Pick => sessions::pick(),
         Commands::Project { command } => match command {
             ProjectCommands::List => {

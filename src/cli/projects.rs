@@ -1,4 +1,4 @@
-use std::error::Error;
+use anyhow::{Result, anyhow, bail};
 
 use crate::{config, fzf, git, tmux};
 
@@ -22,39 +22,37 @@ pub fn load_project(
     project_name: &str,
     session_override: Option<&str>,
     worktree: Option<&str>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     tmux::err_in_tmux()?;
 
     let config = config::config();
     let project = config
         .project(project_name)
-        .ok_or_else(|| format!("Project \"{project_name}\" is not configured"))?;
+        .ok_or_else(|| anyhow!("Project \"{project_name}\" is not configured"))?;
 
     let template = config
         .project_session_template(&project, session_override)
         .ok_or_else(|| {
             let template_name = session_override.unwrap_or("<project default>");
-            format!("Session template \"{template_name}\" is not configured")
+            anyhow!("Session template \"{template_name}\" is not configured")
         })?;
 
     if !project.path.exists() {
-        return Err(format!(
+        bail!(
             "Project \"{}\" path {} does not exist; configured repository is {}",
             project.name,
             project.path.display(),
             project.repository
-        )
-        .into());
+        );
     }
 
     if !project.path.is_dir() {
-        return Err(format!(
+        bail!(
             "Project \"{}\" path {} is not a directory; configured repository is {}",
             project.name,
             project.path.display(),
             project.repository
-        )
-        .into());
+        );
     }
 
     let (root, tmux_name) = match worktree {
@@ -69,36 +67,34 @@ pub fn load_project(
     Ok(())
 }
 
-pub fn open_project_interactive(project_name: &str) -> Result<(), Box<dyn Error>> {
+pub fn open_project_interactive(project_name: &str) -> Result<()> {
     tmux::err_in_tmux()?;
 
     let config = config::config();
     let project = config
         .project(project_name)
-        .ok_or_else(|| format!("Project \"{project_name}\" is not configured"))?;
+        .ok_or_else(|| anyhow!("Project \"{project_name}\" is not configured"))?;
 
     let template = config
         .project_session_template(&project, None)
-        .ok_or_else(|| "Project default session template is not configured".to_owned())?;
+        .ok_or_else(|| anyhow!("Project default session template is not configured"))?;
 
     if !project.path.exists() {
-        return Err(format!(
+        bail!(
             "Project \"{}\" path {} does not exist; configured repository is {}",
             project.name,
             project.path.display(),
             project.repository
-        )
-        .into());
+        );
     }
 
     if !project.path.is_dir() {
-        return Err(format!(
+        bail!(
             "Project \"{}\" path {} is not a directory; configured repository is {}",
             project.name,
             project.path.display(),
             project.repository
-        )
-        .into());
+        );
     }
 
     let worktrees = git::list_worktrees(&project.path)?;
@@ -120,7 +116,7 @@ pub fn open_project_interactive(project_name: &str) -> Result<(), Box<dyn Error>
     let root = branch_worktrees
         .into_iter()
         .find_map(|(candidate, path)| (candidate == branch).then_some(path))
-        .ok_or_else(|| format!("Selected unknown worktree branch \"{branch}\""))?;
+        .ok_or_else(|| anyhow!("Selected unknown worktree branch \"{branch}\""))?;
     let tmux_name = format!("{}--{branch}", project.name);
 
     tmux::open_session(&tmux_name, &root, template)?;

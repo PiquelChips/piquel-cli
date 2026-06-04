@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use thiserror::Error;
 
 /// A git worktree discovered from `git worktree list --porcelain`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,15 +15,19 @@ pub struct Worktree {
 }
 
 /// Errors produced while discovering git worktrees.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum GitError {
     /// The git process could not be spawned or observed.
-    Io(io::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
     /// git exited unsuccessfully.
+    #[error("{0}")]
     Command(String),
     /// The configured project path does not exist.
+    #[error("Project path {} does not exist", .0.display())]
     MissingProjectPath(PathBuf),
     /// No worktree exists for the requested branch.
+    #[error("No local git worktree for branch \"{branch}\" exists under {}", project_path.display())]
     MissingWorktree {
         /// Branch that was requested.
         branch: String,
@@ -30,35 +35,8 @@ pub enum GitError {
         project_path: PathBuf,
     },
     /// git worktree output could not be parsed.
+    #[error("{0}")]
     Parse(String),
-}
-
-impl std::fmt::Display for GitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GitError::Io(e) => write!(f, "IO error: {e}"),
-            GitError::Command(msg) | GitError::Parse(msg) => write!(f, "{msg}"),
-            GitError::MissingProjectPath(path) => {
-                write!(f, "Project path {} does not exist", path.display())
-            }
-            GitError::MissingWorktree {
-                branch,
-                project_path,
-            } => write!(
-                f,
-                "No local git worktree for branch \"{branch}\" exists under {}",
-                project_path.display()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for GitError {}
-
-impl From<io::Error> for GitError {
-    fn from(e: io::Error) -> Self {
-        GitError::Io(e)
-    }
 }
 
 /// Lists all git worktrees for `project_path`.
