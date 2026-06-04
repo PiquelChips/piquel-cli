@@ -15,7 +15,7 @@ let
         nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''
-        makeWrapper ${pkgs.callPackage ./pkg.nix { }}/bin/piquelcli $out/bin/piquel \
+        makeWrapper ${pkgs.callPackage ./pkg.nix { }}/bin/piquel $out/bin/piquel \
             --add-flags "--config ${configFile}" \
             --prefix PATH : ${
               lib.makeBinPath [

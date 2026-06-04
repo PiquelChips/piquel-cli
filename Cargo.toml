@@ -19,6 +19,10 @@ include = [
     "LICENSE",
 ]
 
+[[bin]]
+name = "piquel"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
