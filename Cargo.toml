@@ -11,13 +11,6 @@ homepage = "https://github.com/PiquelChips/piquel-cli"
 readme = "README.md"
 keywords = ["cli", "tmux", "sessions", "workspace"]
 categories = ["command-line-utilities"]
-include = [
-    "src/**",
-    "Cargo.toml",
-    "Cargo.lock",
-    "README.md",
-    "LICENSE",
-]
 
 [[bin]]
 name = "piquel"
