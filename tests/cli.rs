@@ -17,7 +17,7 @@ struct TestDir {
 impl TestDir {
     fn new() -> Self {
         let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("piquelcli-test-{}-{id}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("piquel-test-{}-{id}", std::process::id()));
         fs::create_dir(&path).expect("temp dir should be created");
         Self { path }
     }
@@ -63,7 +63,7 @@ fn config_with_projects(temp: &TestDir) -> PathBuf {
 }
 
 fn piquel() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_piquelcli"))
+    Command::new(env!("CARGO_BIN_EXE_piquel"))
 }
 
 fn path_str(path: &Path) -> &str {
@@ -224,7 +224,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    piquel().args(args).output().expect("piquelcli should run")
+    piquel().args(args).output().expect("piquel should run")
 }
 
 #[test]
@@ -274,7 +274,7 @@ fn project_load_rejects_missing_project_path_before_opening_tmux_session() {
     let config = write_config(
         &temp,
         r#"{
-            "projects_dir": "/tmp/piquelcli-test-projects-that-do-not-exist",
+            "projects_dir": "/tmp/piquel-test-projects-that-do-not-exist",
             "default_session": "default",
             "sessions": {
                 "default": { "windows": [{ "commands": [] }] }
@@ -291,7 +291,7 @@ fn project_load_rejects_missing_project_path_before_opening_tmux_session() {
         .env_remove("TMUX")
         .args(["--config", path_str(&config), "project", "load", "alpha"])
         .output()
-        .expect("piquelcli should run");
+        .expect("piquel should run");
 
     assert_failure(&output, &["Project \"alpha\" path", "does not exist"]);
 }
@@ -322,7 +322,7 @@ exit 64
         .env("PATH", prepend_path(&tmux_bin))
         .args(["--config", path_str(&config), "list"])
         .output()
-        .expect("piquelcli should run");
+        .expect("piquel should run");
 
     assert_success(&output, "alpha\nzeta\n", "");
 }
@@ -363,7 +363,7 @@ fn project_load_creates_tmux_session_from_configured_template() {
         .env("PATH", prepend_path(&bin))
         .args(["--config", path_str(&config), "project", "load", "alpha"])
         .output()
-        .expect("piquelcli should run");
+        .expect("piquel should run");
 
     assert_success(&output, "", "");
 
@@ -431,7 +431,7 @@ fn project_load_worktree_opens_requested_branch_worktree() {
             "feature/foo",
         ])
         .output()
-        .expect("piquelcli should run");
+        .expect("piquel should run");
 
     assert_success(&output, "", "");
 
@@ -462,7 +462,7 @@ fn pick_routes_fzf_tmux_selection_to_attach() {
         .env("PATH", prepend_path(&bin))
         .args(["--config", path_str(&config), "pick"])
         .output()
-        .expect("piquelcli should run");
+        .expect("piquel should run");
 
     assert_success(&output, "", "");
 
