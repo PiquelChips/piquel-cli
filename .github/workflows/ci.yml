@@ -87,7 +87,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: piquelcli-release-${{ matrix.os }}
-          path: target/release/piquelcli
+          path: target/release/piquel
 
   test:
     name: Test (${{ matrix.os }})
