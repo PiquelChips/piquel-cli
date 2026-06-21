@@ -27,7 +27,13 @@ pub enum Commands {
     /// List running tmux sessions
     List,
     /// Interactively pick a running tmux session or configured project
-    Pick,
+    Pick {
+        /// Project name to open directly.
+        project: Option<String>,
+        /// Session template override used only when opening a project.
+        #[arg(short = 's', long = "session")]
+        session: Option<String>,
+    },
     /// Manage configured projects
     Project {
         /// Project subcommand to run.
@@ -89,7 +95,9 @@ pub fn run() -> Result<()> {
             tmux::list_sessions(false, true)?;
             Ok(())
         }
-        Commands::Pick => sessions::pick(),
+        Commands::Pick { project, session } => {
+            sessions::pick(project.as_deref(), session.as_deref())
+        }
         Commands::Project { command } => match command {
             ProjectCommands::List => {
                 projects::list_projects();

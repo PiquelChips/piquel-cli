@@ -103,6 +103,12 @@ in
               description = "Default directory for local projects.";
             };
 
+            worktrees_dir = mkOption {
+              type = types.str;
+              default = "~/.piquel/worktrees";
+              description = "Default directory for managed project worktrees.";
+            };
+
             default_session = mkOption {
               type = types.str;
               default = "default";

@@ -1,5 +1,6 @@
 {
     "projects_dir": "~/Projects",
+    "worktrees_dir": "~/.piquel/worktrees",
     "default_session": "default",
     "sessions": {
         "default": {

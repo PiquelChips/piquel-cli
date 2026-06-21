@@ -34,9 +34,81 @@ pub enum GitError {
         /// Project path that was searched.
         project_path: PathBuf,
     },
+    /// The branch cannot be converted into a managed worktree path segment.
+    #[error("Branch \"{0}\" cannot be used as a managed worktree path segment")]
+    InvalidManagedWorktreeBranch(String),
+    /// The managed worktree path exists but belongs to another checkout.
+    #[error("Managed worktree path {} already exists but is not registered for branch \"{branch}\"", path.display())]
+    ManagedWorktreePathConflict {
+        /// Existing path that would be reused for the managed worktree.
+        path: PathBuf,
+        /// Branch that was requested.
+        branch: String,
+    },
     /// git worktree output could not be parsed.
     #[error("{0}")]
     Parse(String),
+}
+
+/// Lists local branch names for `project_path`, sorted by git.
+///
+/// # Errors
+///
+/// Returns an error if `project_path` does not exist or git fails.
+pub fn list_local_branches(project_path: &Path) -> Result<Vec<String>, GitError> {
+    if !project_path.exists() {
+        return Err(GitError::MissingProjectPath(project_path.to_owned()));
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_path)
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+        .output()
+        .map_err(GitError::Io)?;
+
+    let combined = {
+        let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
+        s.push_str(&String::from_utf8_lossy(&output.stderr));
+        s
+    };
+
+    if !output.status.success() {
+        return Err(GitError::Command(combined));
+    }
+
+    Ok(parse_local_branches(&combined))
+}
+
+/// Creates a git worktree for `branch` at `worktree_path`.
+///
+/// # Errors
+///
+/// Returns an error if git fails.
+pub fn create_worktree(
+    project_path: &Path,
+    worktree_path: &Path,
+    branch: &str,
+) -> Result<(), GitError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_path)
+        .args(["worktree", "add"])
+        .arg(worktree_path)
+        .arg(branch)
+        .output()
+        .map_err(GitError::Io)?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let combined = {
+        let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
+        s.push_str(&String::from_utf8_lossy(&output.stderr));
+        s
+    };
+    Err(GitError::Command(combined))
 }
 
 /// Lists all git worktrees for `project_path`.
@@ -79,6 +151,15 @@ pub fn find_worktree(project_path: &Path, branch: &str) -> Result<Worktree, GitE
     find_worktree_in(list_worktrees(project_path)?, project_path, branch)
 }
 
+/// Finds the worktree for `branch` in an already-discovered worktree list.
+#[must_use]
+pub fn worktree_for_branch(worktrees: &[Worktree], branch: &str) -> Option<Worktree> {
+    worktrees
+        .iter()
+        .find(|worktree| worktree.branch.as_deref() == Some(branch))
+        .cloned()
+}
+
 fn find_worktree_in(
     worktrees: Vec<Worktree>,
     project_path: &Path,
@@ -117,6 +198,17 @@ fn parse_worktrees(input: &str) -> Result<Vec<Worktree>, GitError> {
 
     push_worktree(&mut worktrees, current_path.take(), current_branch.take())?;
     Ok(worktrees)
+}
+
+fn parse_local_branches(input: &str) -> Vec<String> {
+    let mut branches = input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    branches.sort();
+    branches
 }
 
 fn push_worktree(
@@ -169,6 +261,78 @@ pub fn branch_worktree_choices(worktrees: &[Worktree]) -> Vec<(String, PathBuf)>
         .collect::<Vec<_>>();
     choices.sort_by(|(left, _), (right, _)| left.cmp(right));
     choices
+}
+
+/// Returns the managed worktree path for `project_name` and `branch`.
+///
+/// # Errors
+///
+/// Returns an error when `branch` cannot produce a non-empty path segment.
+pub fn managed_worktree_path(
+    worktrees_dir: &Path,
+    project_name: &str,
+    branch: &str,
+) -> Result<PathBuf, GitError> {
+    let branch_segment = sanitized_branch_segment(branch);
+    if branch_segment.is_empty() {
+        return Err(GitError::InvalidManagedWorktreeBranch(branch.to_owned()));
+    }
+
+    Ok(worktrees_dir.join(project_name).join(branch_segment))
+}
+
+/// Returns a managed worktree path and rejects path collisions.
+///
+/// # Errors
+///
+/// Returns an error if the branch path cannot be generated or if an existing
+/// path is not already registered as `branch`'s worktree.
+pub fn managed_worktree_path_for_branch(
+    worktrees_dir: &Path,
+    project_name: &str,
+    branch: &str,
+    worktrees: &[Worktree],
+) -> Result<PathBuf, GitError> {
+    let path = managed_worktree_path(worktrees_dir, project_name, branch)?;
+
+    if path.exists()
+        && !worktrees.iter().any(|worktree| {
+            same_path(&worktree.path, &path) && worktree.branch.as_deref() == Some(branch)
+        })
+    {
+        return Err(GitError::ManagedWorktreePathConflict {
+            path,
+            branch: branch.to_owned(),
+        });
+    }
+
+    Ok(path)
+}
+
+fn sanitized_branch_segment(input: &str) -> String {
+    let mut sanitized = String::new();
+    let mut last_was_underscore = false;
+
+    for ch in input.trim().chars() {
+        let next = if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            ch
+        } else {
+            '_'
+        };
+
+        if next == '_' {
+            if last_was_underscore {
+                continue;
+            }
+            last_was_underscore = true;
+        } else {
+            last_was_underscore = false;
+        }
+
+        sanitized.push(next);
+    }
+
+    sanitized
 }
 
 #[cfg(test)]
@@ -260,6 +424,75 @@ detached
         .expect_err("missing branch should return an error");
 
         assert!(err.to_string().contains("feature/foo"));
+    }
+
+    #[test]
+    fn parses_and_sorts_local_branches() {
+        let branches = parse_local_branches(
+            "\
+zeta
+feature/foo
+
+main
+",
+        );
+
+        assert_eq!(branches, vec!["feature/foo", "main", "zeta"]);
+    }
+
+    #[test]
+    fn parses_empty_local_branch_list() {
+        assert!(parse_local_branches("\n").is_empty());
+    }
+
+    #[test]
+    fn worktree_for_branch_matches_exact_branch() {
+        let worktrees = vec![
+            worktree("/repo", Some("main")),
+            worktree("/repo-feature", Some("feature/foo")),
+            worktree("/repo-featured", Some("feature")),
+        ];
+
+        let found =
+            worktree_for_branch(&worktrees, "feature/foo").expect("branch worktree should exist");
+
+        assert_eq!(found.path, PathBuf::from("/repo-feature"));
+    }
+
+    #[test]
+    fn generates_managed_worktree_path() {
+        let path = managed_worktree_path(Path::new("/worktrees"), "alpha", "feature/foo")
+            .expect("managed path should be generated");
+
+        assert_eq!(path, PathBuf::from("/worktrees/alpha/feature_foo"));
+    }
+
+    #[test]
+    fn rejects_empty_managed_worktree_path_segment() {
+        let err = managed_worktree_path(Path::new("/worktrees"), "alpha", "   ")
+            .expect_err("empty branch should be rejected");
+
+        assert!(matches!(err, GitError::InvalidManagedWorktreeBranch(_)));
+    }
+
+    #[test]
+    fn rejects_existing_unregistered_managed_worktree_path() {
+        let root = std::env::temp_dir().join(format!(
+            "piquel-git-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos()
+        ));
+        let existing = root.join("alpha/feature_foo");
+        std::fs::create_dir_all(&existing).expect("test directory should be created");
+
+        let err = managed_worktree_path_for_branch(&root, "alpha", "feature/foo", &[])
+            .expect_err("existing unregistered path should be rejected");
+
+        assert!(matches!(err, GitError::ManagedWorktreePathConflict { .. }));
+
+        std::fs::remove_dir_all(root).expect("test directory should be removed");
     }
 
     #[test]

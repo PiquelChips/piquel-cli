@@ -115,6 +115,8 @@ pub enum ProjectSessionConfig {
 pub struct Config {
     #[serde(default = "default_projects_dir")]
     projects_dir: PathBuf,
+    #[serde(default = "default_worktrees_dir")]
+    worktrees_dir: PathBuf,
     #[serde(default = "default_default_session")]
     default_session: String,
     #[serde(default)]
@@ -132,6 +134,7 @@ impl Config {
     /// default-session references are invalid.
     pub fn validate_and_normalize(&mut self) -> Result<(), ConfigError> {
         self.projects_dir = expand_home(&self.projects_dir);
+        self.worktrees_dir = expand_home(&self.worktrees_dir);
 
         for (name, session) in &self.sessions {
             session.validate(name)?;
@@ -250,6 +253,10 @@ fn default_projects_dir() -> PathBuf {
     PathBuf::from("~/Projects")
 }
 
+fn default_worktrees_dir() -> PathBuf {
+    PathBuf::from("~/.piquel/worktrees")
+}
+
 fn default_default_session() -> String {
     "default".to_owned()
 }
@@ -264,7 +271,14 @@ fn repository_basename(repository: &str) -> Result<String, ConfigError> {
 }
 
 fn validate_project_name(name: &str) -> Result<(), ConfigError> {
-    if name.trim().is_empty() || name.contains(':') {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || name.contains(':')
+        || name.contains('/')
+        || name.contains('\\')
+    {
         return Err(ConfigError::Validation(format!(
             "\"{name}\" is not a valid project name"
         )));
@@ -290,6 +304,7 @@ mod tests {
     fn config_with_default() -> Config {
         Config {
             projects_dir: PathBuf::from("~/Projects"),
+            worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
             default_session: "default".to_owned(),
             sessions: HashMap::from([("default".to_owned(), session())]),
             projects: vec![],
@@ -297,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn expands_projects_dir_and_project_path() {
+    fn expands_projects_dir_worktrees_dir_and_project_path() {
         let home = std::env::home_dir().expect("HOME should be set for tests");
         let mut config = config_with_default();
         config.projects.push(ProjectConfig {
@@ -312,7 +327,28 @@ mod tests {
             .expect("config should validate");
 
         assert_eq!(config.projects_dir, home.join("Projects"));
+        assert_eq!(config.worktrees_dir, home.join(".piquel/worktrees"));
         assert_eq!(config.projects[0].path, Some(home.join("src/repo")));
+    }
+
+    #[test]
+    fn worktrees_dir_defaults_and_expands_from_json_config() {
+        let home = std::env::home_dir().expect("HOME should be set for tests");
+        let mut config = serde_json::from_str::<Config>(
+            r#"{
+                "default_session": "default",
+                "sessions": {
+                    "default": { "windows": [{ "commands": [] }] }
+                }
+            }"#,
+        )
+        .expect("config should parse");
+
+        config
+            .validate_and_normalize()
+            .expect("config should validate");
+
+        assert_eq!(config.worktrees_dir, home.join(".piquel/worktrees"));
     }
 
     #[test]
@@ -339,9 +375,35 @@ mod tests {
     }
 
     #[test]
+    fn project_names_must_be_safe_path_segments() {
+        for name in [
+            "",
+            "   ",
+            ".",
+            "..",
+            "owner/repo",
+            r"owner\repo",
+            "repo:name",
+        ] {
+            let project = ProjectConfig {
+                repository: "https://github.com/owner/repo.git".to_owned(),
+                name: Some(name.to_owned()),
+                path: None,
+                default_session: None,
+            };
+
+            assert!(
+                project.resolved_name().is_err(),
+                "{name:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn missing_global_default_session_fails_validation() {
         let mut config = Config {
             projects_dir: PathBuf::from("~/Projects"),
+            worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
             default_session: "missing".to_owned(),
             sessions: HashMap::from([("default".to_owned(), session())]),
             projects: vec![],
@@ -354,6 +416,7 @@ mod tests {
     fn empty_session_template_windows_fail_validation() {
         let mut config = Config {
             projects_dir: PathBuf::from("~/Projects"),
+            worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
             default_session: "default".to_owned(),
             sessions: HashMap::from([("default".to_owned(), SessionConfig { windows: vec![] })]),
             projects: vec![],

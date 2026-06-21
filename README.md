@@ -41,7 +41,7 @@ Commands:
 
 ```text
 piquel list
-piquel pick
+piquel pick [project] [--session <template>]
 piquel project list
 piquel project load <project> [--session <template>] [--worktree <branch>]
 piquel session [path] [--session <template>] [--name <tmux-name>]
@@ -49,11 +49,28 @@ piquel session [path] [--session <template>] [--name <tmux-name>]
 
 `piquel list` prints running tmux sessions. `piquel pick` combines running
 tmux sessions and configured projects, lets `fzf` select one, then attaches to
-the session or opens the project.
+the session or opens the project branch workflow. `piquel pick <project>` skips
+the first picker and opens that project's branch workflow directly.
+
+The branch picker lists local git branches only. It does not fetch and does not
+create remote-tracking branches. If the selected branch already has a worktree,
+`piquel` opens it. If not, `piquel` creates a managed worktree at
+`<worktrees_dir>/<project>/<sanitized-branch>`.
+
+Branch-selected tmux sessions use `project--branch` names, with the branch
+sanitized for tmux. This also applies when the selected branch is checked out at
+the configured project path. Branch-aware workflows use the plain `project`
+session name only when the project has no local branches.
+
+`piquel pick --session <template>` uses the template override only when a
+project is opened. Selecting an existing tmux session still attaches to that
+session unchanged.
 
 `piquel project load` opens a configured project. When `--worktree` is set,
-the CLI runs `git worktree list --porcelain` under the project path and opens
-the matching branch worktree.
+the CLI opens the requested local branch worktree, creating a managed worktree
+if the branch does not already have one. Bare `piquel project load <project>`
+keeps the legacy behavior: it opens the configured project path with tmux
+session name `project`.
 
 `piquel session` opens an arbitrary directory with a configured session
 template. If no path is given, it uses the current working directory. If no
@@ -83,6 +100,7 @@ Fuller project config:
 ```json
 {
   "projects_dir": "~/Projects",
+  "worktrees_dir": "~/.piquel/worktrees",
   "default_session": "default",
   "sessions": {
     "default": {
@@ -131,6 +149,8 @@ Fields:
 
 - `projects_dir`: base directory for projects without an explicit `path`.
   Defaults to `~/Projects`.
+- `worktrees_dir`: base directory for managed branch worktrees. Defaults to
+  `~/.piquel/worktrees`.
 - `default_session`: the session template used when a project does not specify
   one. Defaults to `default`.
 - `sessions`: named tmux session templates. Each template must have at least
@@ -144,8 +164,10 @@ Fields:
 - `sessions.*.windows[].commands`: commands sent to the created tmux window,
   each followed by `Enter`.
 
-Project and session names must not be empty or contain `:`. tmux session names
-derived from worktree branches are sanitized before tmux is invoked.
+Project names must be safe path segments: they must not be empty, `.`, `..`, or
+contain `/`, `\`, or `:`. Session names must not be empty or contain `:`. tmux
+session names derived from worktree branches are sanitized before tmux is
+invoked.
 
 ## Testing
 
