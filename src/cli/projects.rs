@@ -1,6 +1,8 @@
-use anyhow::{Result, anyhow, bail};
+use std::fs;
 
-use crate::{config, fzf, git, tmux};
+use anyhow::{Context, Result, anyhow, bail};
+
+use crate::{Config, ResolvedProject, SessionConfig, config, fzf, git, tmux};
 
 pub fn list_projects() {
     let config = config::config();
@@ -37,37 +39,17 @@ pub fn load_project(
             anyhow!("Session template \"{template_name}\" is not configured")
         })?;
 
-    if !project.path.exists() {
-        bail!(
-            "Project \"{}\" path {} does not exist; configured repository is {}",
-            project.name,
-            project.path.display(),
-            project.repository
-        );
+    validate_project_path(&project)?;
+
+    match worktree {
+        Some(branch) => open_project_branch(config, &project, template, branch)?,
+        None => tmux::open_session(&project.name, &project.path, template)?,
     }
 
-    if !project.path.is_dir() {
-        bail!(
-            "Project \"{}\" path {} is not a directory; configured repository is {}",
-            project.name,
-            project.path.display(),
-            project.repository
-        );
-    }
-
-    let (root, tmux_name) = match worktree {
-        Some(branch) => {
-            let worktree = git::find_worktree(&project.path, branch)?;
-            (worktree.path, format!("{}--{branch}", project.name))
-        }
-        None => (project.path.clone(), project.name.clone()),
-    };
-
-    tmux::open_session(&tmux_name, &root, template)?;
     Ok(())
 }
 
-pub fn open_project_interactive(project_name: &str) -> Result<()> {
+pub fn open_project_interactive(project_name: &str, session_override: Option<&str>) -> Result<()> {
     tmux::err_in_tmux()?;
 
     let config = config::config();
@@ -76,9 +58,29 @@ pub fn open_project_interactive(project_name: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("Project \"{project_name}\" is not configured"))?;
 
     let template = config
-        .project_session_template(&project, None)
-        .ok_or_else(|| anyhow!("Project default session template is not configured"))?;
+        .project_session_template(&project, session_override)
+        .ok_or_else(|| {
+            let template_name = session_override.unwrap_or("<project default>");
+            anyhow!("Session template \"{template_name}\" is not configured")
+        })?;
 
+    validate_project_path(&project)?;
+
+    let branches = git::list_local_branches(&project.path)?;
+    if branches.is_empty() {
+        tmux::open_session(&project.name, &project.path, template)?;
+        return Ok(());
+    }
+
+    let Some(branch) = fzf::select(branches, "branch> ")? else {
+        return Ok(());
+    };
+
+    open_project_branch(config, &project, template, &branch)?;
+    Ok(())
+}
+
+fn validate_project_path(project: &ResolvedProject) -> Result<()> {
     if !project.path.exists() {
         bail!(
             "Project \"{}\" path {} does not exist; configured repository is {}",
@@ -97,28 +99,47 @@ pub fn open_project_interactive(project_name: &str) -> Result<()> {
         );
     }
 
-    let worktrees = git::list_worktrees(&project.path)?;
-    if !git::has_additional_worktrees(&project.path, &worktrees) {
-        tmux::open_session(&project.name, &project.path, template)?;
-        return Ok(());
+    Ok(())
+}
+
+fn open_project_branch(
+    config: &Config,
+    project: &ResolvedProject,
+    template: &SessionConfig,
+    branch: &str,
+) -> Result<()> {
+    let branches = git::list_local_branches(&project.path)?;
+    if !branches.iter().any(|candidate| candidate == branch) {
+        bail!(
+            "Branch \"{}\" is not a local branch for project \"{}\"",
+            branch,
+            project.name
+        );
     }
 
-    let branch_worktrees = git::branch_worktree_choices(&worktrees);
-    let branch_names = branch_worktrees
-        .iter()
-        .map(|(branch, _)| branch.clone())
-        .collect::<Vec<_>>();
-
-    let Some(branch) = fzf::select(branch_names, "worktree> ")? else {
-        return Ok(());
+    let worktrees = git::list_worktrees(&project.path)?;
+    let root = if let Some(worktree) = git::worktree_for_branch(&worktrees, branch) {
+        worktree.path
+    } else {
+        let worktree_path = git::managed_worktree_path_for_branch(
+            &config.worktrees_dir,
+            &project.name,
+            branch,
+            &worktrees,
+        )?;
+        if let Some(parent) = worktree_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to create managed worktree directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        git::create_worktree(&project.path, &worktree_path, branch)?;
+        worktree_path
     };
 
-    let root = branch_worktrees
-        .into_iter()
-        .find_map(|(candidate, path)| (candidate == branch).then_some(path))
-        .ok_or_else(|| anyhow!("Selected unknown worktree branch \"{branch}\""))?;
     let tmux_name = format!("{}--{branch}", project.name);
-
     tmux::open_session(&tmux_name, &root, template)?;
     Ok(())
 }

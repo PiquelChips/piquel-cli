@@ -13,13 +13,20 @@ enum PickTarget {
     Project(String),
 }
 
-pub fn pick() -> Result<()> {
+pub fn pick(project: Option<&str>, session_override: Option<&str>) -> Result<()> {
+    if let Some(project) = project {
+        projects::open_project_interactive(project, session_override)?;
+        return Ok(());
+    }
+
     match pick_target()? {
         Some(PickTarget::TmuxSession(name)) => {
             tmux::err_in_tmux()?;
             tmux::attach(&name)?;
         }
-        Some(PickTarget::Project(name)) => projects::open_project_interactive(&name)?,
+        Some(PickTarget::Project(name)) => {
+            projects::open_project_interactive(&name, session_override)?;
+        }
         None => {}
     }
 

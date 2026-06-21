@@ -2,6 +2,7 @@
 
 use std::{
     ffi::OsStr,
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -165,11 +166,84 @@ printf '%s\n' {}
     )
 }
 
-fn fake_git_worktree_script(main_path: &Path, branch_path: &Path) -> String {
+fn fake_fzf_sequence_script(selections: &[&str], state: &Path, input_prefix: &Path) -> String {
+    let mut cases = String::new();
+    for (index, selection) in selections.iter().enumerate() {
+        writeln!(
+            cases,
+            "{}) printf '%s\\n' {} ;;",
+            index + 1,
+            shell_quote(selection)
+        )
+        .expect("writing to string should succeed");
+    }
+
     format!(
         r#"#!{}
+state={}
+prefix={}
+count=0
+if [ -f "$state" ]; then
+    count=$(cat "$state")
+fi
+next=$((count + 1))
+printf '%s\n' "$next" > "$state"
+cat > "$prefix.$next"
+case "$next" in
+{}    *) exit 130 ;;
+esac
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(state)),
+        shell_quote(path_str(input_prefix)),
+        cases
+    )
+}
+
+fn fake_git_script(branches: &str, worktrees: &str, add_log: Option<&Path>) -> String {
+    let add_log = add_log.map_or_else(
+        || ":".to_owned(),
+        |path| {
+            format!(
+                "log={}\nprintf '%s\\n' \"$*\" >> \"$log\"",
+                shell_quote(path_str(path))
+            )
+        },
+    );
+
+    format!(
+        r#"#!{}
+if [ "$1" = "-C" ] && [ "$3" = "for-each-ref" ]; then
+    cat <<'EOF'
+{}EOF
+    exit 0
+fi
+
 if [ "$1" = "-C" ] && [ "$3" = "worktree" ] && [ "$4" = "list" ] && [ "$5" = "--porcelain" ]; then
     cat <<'EOF'
+{}EOF
+    exit 0
+fi
+
+if [ "$1" = "-C" ] && [ "$3" = "worktree" ] && [ "$4" = "add" ]; then
+    {}
+    exit 0
+fi
+
+exit 64
+"#,
+        path_str(&shell_path()),
+        branches,
+        worktrees,
+        add_log
+    )
+}
+
+fn fake_git_worktree_script(main_path: &Path, branch_path: &Path) -> String {
+    fake_git_script(
+        "main\nfeature/foo\n",
+        &format!(
+            "\
 worktree {}
 HEAD 1111111111111111111111111111111111111111
 branch refs/heads/main
@@ -178,15 +252,11 @@ worktree {}
 HEAD 2222222222222222222222222222222222222222
 branch refs/heads/feature/foo
 
-EOF
-    exit 0
-fi
-
-exit 64
-"#,
-        path_str(&shell_path()),
-        path_str(main_path),
-        path_str(branch_path)
+",
+            path_str(main_path),
+            path_str(branch_path)
+        ),
+        None,
     )
 }
 
@@ -225,6 +295,42 @@ where
     S: AsRef<OsStr>,
 {
     piquel().args(args).output().expect("piquel should run")
+}
+
+fn config_for_alpha_project(
+    temp: &TestDir,
+    project_path: &Path,
+    worktrees_dir: Option<&Path>,
+) -> PathBuf {
+    let worktrees_dir_field = worktrees_dir.map_or_else(String::new, |path| {
+        format!(
+            r#""worktrees_dir": {},
+            "#,
+            serde_json::to_string(path_str(path)).expect("path should serialize")
+        )
+    });
+
+    write_config(
+        temp,
+        &format!(
+            r#"{{
+                "projects_dir": "/tmp/projects",
+                {}"default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": ["default cmd"] }}] }},
+                    "rust": {{ "windows": [{{ "commands": ["cargo check"] }}] }}
+                }},
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git",
+                        "path": {}
+                    }}
+                ]
+            }}"#,
+            worktrees_dir_field,
+            serde_json::to_string(path_str(project_path)).expect("path should serialize")
+        ),
+    )
 }
 
 #[test]
@@ -444,6 +550,70 @@ fn project_load_worktree_opens_requested_branch_worktree() {
 }
 
 #[test]
+fn project_load_worktree_creates_missing_managed_worktree() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    let worktrees_dir = temp.path().join("managed-worktrees");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, Some(&worktrees_dir));
+    let tmux_log = temp.path().join("tmux.log");
+    let git_add_log = temp.path().join("git-add.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            (
+                "git",
+                fake_git_script(
+                    "main\nfeature/foo\n",
+                    &format!(
+                        "\
+worktree {}
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+",
+                        path_str(&project_path)
+                    ),
+                    Some(&git_add_log),
+                ),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "project",
+            "load",
+            "alpha",
+            "--worktree",
+            "feature/foo",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let managed_path = worktrees_dir.join("alpha/feature_foo");
+    let git_log = fs::read_to_string(git_add_log).expect("git add log should be readable");
+    assert!(git_log.contains(&format!(
+        "-C {} worktree add {} feature/foo",
+        path_str(&project_path),
+        path_str(&managed_path)
+    )));
+
+    let tmux_log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(tmux_log.contains(&format!(
+        "new-session -d -c {} -s alpha--feature_foo",
+        path_str(&managed_path)
+    )));
+}
+
+#[test]
 fn pick_routes_fzf_tmux_selection_to_attach() {
     let temp = TestDir::new();
     let config = config_with_projects(&temp);
@@ -472,4 +642,314 @@ fn pick_routes_fzf_tmux_selection_to_attach() {
     let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
     assert!(log.contains("list-sessions -F #{session_name}"));
     assert!(log.contains("attach -t beta"));
+}
+
+#[test]
+fn pick_with_session_still_attaches_selected_tmux_session_unchanged() {
+    let temp = TestDir::new();
+    let config = config_with_projects(&temp);
+    let tmux_log = temp.path().join("tmux.log");
+    let fzf_input = temp.path().join("fzf-input.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "beta\n")),
+            ("fzf", fake_fzf_script("beta", &fzf_input)),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick", "--session", "rust"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("attach -t beta"));
+    assert!(!log.contains("cargo check"));
+}
+
+#[test]
+fn pick_project_argument_skips_first_picker_and_shows_branch_picker() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    let worktree_path = temp.path().join("worktrees/alpha-feature");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    fs::create_dir_all(&worktree_path).expect("worktree path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+    let tmux_log = temp.path().join("tmux.log");
+    let fzf_input = temp.path().join("fzf-input.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            ("fzf", fake_fzf_script("feature/foo", &fzf_input)),
+            (
+                "git",
+                fake_git_worktree_script(&project_path, &worktree_path),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let fzf_items = fs::read_to_string(fzf_input).expect("fzf input should be readable");
+    assert_eq!(fzf_items, "feature/foo\nmain\n");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains(&format!(
+        "new-session -d -c {} -s alpha--feature_foo",
+        path_str(&worktree_path)
+    )));
+}
+
+#[test]
+fn pick_project_branch_checked_out_at_project_path_uses_branch_session_name() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+    let tmux_log = temp.path().join("tmux.log");
+    let fzf_input = temp.path().join("fzf-input.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            ("fzf", fake_fzf_script("main", &fzf_input)),
+            (
+                "git",
+                fake_git_script(
+                    "main\n",
+                    &format!(
+                        "\
+worktree {}
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+",
+                        path_str(&project_path)
+                    ),
+                    None,
+                ),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains(&format!(
+        "new-session -d -c {} -s alpha--main",
+        path_str(&project_path)
+    )));
+}
+
+#[test]
+fn pick_project_with_no_local_branches_opens_project_session() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+    let tmux_log = temp.path().join("tmux.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            ("git", fake_git_script("", "", None)),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains(&format!(
+        "new-session -d -c {} -s alpha",
+        path_str(&project_path)
+    )));
+}
+
+#[test]
+fn pick_project_missing_branch_worktree_runs_git_worktree_add() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    let worktrees_dir = temp.path().join("managed-worktrees");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, Some(&worktrees_dir));
+    let tmux_log = temp.path().join("tmux.log");
+    let fzf_input = temp.path().join("fzf-input.log");
+    let git_add_log = temp.path().join("git-add.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            ("fzf", fake_fzf_script("feature/foo", &fzf_input)),
+            (
+                "git",
+                fake_git_script(
+                    "main\nfeature/foo\n",
+                    &format!(
+                        "\
+worktree {}
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+",
+                        path_str(&project_path)
+                    ),
+                    Some(&git_add_log),
+                ),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let managed_path = worktrees_dir.join("alpha/feature_foo");
+    let git_log = fs::read_to_string(git_add_log).expect("git add log should be readable");
+    assert!(git_log.contains(&format!(
+        "-C {} worktree add {} feature/foo",
+        path_str(&project_path),
+        path_str(&managed_path)
+    )));
+}
+
+#[test]
+fn pick_session_override_applies_to_project_created_session() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+    let tmux_log = temp.path().join("tmux.log");
+    let fzf_input = temp.path().join("fzf-input.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            ("fzf", fake_fzf_script("main", &fzf_input)),
+            (
+                "git",
+                fake_git_script(
+                    "main\n",
+                    &format!(
+                        "\
+worktree {}
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+",
+                        path_str(&project_path)
+                    ),
+                    None,
+                ),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "pick",
+            "alpha",
+            "--session",
+            "rust",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("send-keys -t window-id cargo check Enter"));
+    assert!(!log.contains("send-keys -t window-id default cmd Enter"));
+}
+
+#[test]
+fn pick_session_override_applies_after_selecting_project_from_first_picker() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+    let tmux_log = temp.path().join("tmux.log");
+    let fzf_state = temp.path().join("fzf-state");
+    let fzf_prefix = temp.path().join("fzf-input");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            (
+                "fzf",
+                fake_fzf_sequence_script(&["alpha", "main"], &fzf_state, &fzf_prefix),
+            ),
+            (
+                "git",
+                fake_git_script(
+                    "main\n",
+                    &format!(
+                        "\
+worktree {}
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+",
+                        path_str(&project_path)
+                    ),
+                    None,
+                ),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick", "--session", "rust"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let first_input =
+        fs::read_to_string(fzf_prefix.with_extension("1")).expect("first fzf input readable");
+    let second_input =
+        fs::read_to_string(fzf_prefix.with_extension("2")).expect("second fzf input readable");
+    assert_eq!(first_input, "alpha\n");
+    assert_eq!(second_input, "main\n");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("send-keys -t window-id cargo check Enter"));
+    assert!(!log.contains("send-keys -t window-id default cmd Enter"));
 }
