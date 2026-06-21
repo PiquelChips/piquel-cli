@@ -375,6 +375,31 @@ fn invalid_config_schema_exits_with_parse_error() {
 }
 
 #[test]
+fn unsafe_project_name_exits_with_validation_error() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        r#"{
+            "projects_dir": "/tmp/projects",
+            "default_session": "default",
+            "sessions": {
+                "default": { "windows": [{ "commands": [] }] }
+            },
+            "projects": [
+                {
+                    "repository": "https://github.com/owner/alpha.git",
+                    "name": "../alpha"
+                }
+            ]
+        }"#,
+    );
+
+    let output = run(["--config", path_str(&config), "project", "list"]);
+
+    assert_failure(&output, &["\"../alpha\" is not a valid project name"]);
+}
+
+#[test]
 fn project_load_rejects_missing_project_path_before_opening_tmux_session() {
     let temp = TestDir::new();
     let config = write_config(

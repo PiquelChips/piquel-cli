@@ -271,7 +271,14 @@ fn repository_basename(repository: &str) -> Result<String, ConfigError> {
 }
 
 fn validate_project_name(name: &str) -> Result<(), ConfigError> {
-    if name.trim().is_empty() || name.contains(':') {
+    let trimmed = name.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || name.contains(':')
+        || name.contains('/')
+        || name.contains('\\')
+    {
         return Err(ConfigError::Validation(format!(
             "\"{name}\" is not a valid project name"
         )));
@@ -363,6 +370,31 @@ mod tests {
                     .resolved_name()
                     .expect("project name should resolve"),
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn project_names_must_be_safe_path_segments() {
+        for name in [
+            "",
+            "   ",
+            ".",
+            "..",
+            "owner/repo",
+            r"owner\repo",
+            "repo:name",
+        ] {
+            let project = ProjectConfig {
+                repository: "https://github.com/owner/repo.git".to_owned(),
+                name: Some(name.to_owned()),
+                path: None,
+                default_session: None,
+            };
+
+            assert!(
+                project.resolved_name().is_err(),
+                "{name:?} should be rejected"
             );
         }
     }

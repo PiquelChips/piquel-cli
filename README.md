@@ -164,8 +164,10 @@ Fields:
 - `sessions.*.windows[].commands`: commands sent to the created tmux window,
   each followed by `Enter`.
 
-Project and session names must not be empty or contain `:`. tmux session names
-derived from worktree branches are sanitized before tmux is invoked.
+Project names must be safe path segments: they must not be empty, `.`, `..`, or
+contain `/`, `\`, or `:`. Session names must not be empty or contain `:`. tmux
+session names derived from worktree branches are sanitized before tmux is
+invoked.
 
 ## Testing
 
