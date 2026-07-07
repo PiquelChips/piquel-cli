@@ -6,6 +6,11 @@ use crate::{Config, ResolvedProject, SessionConfig, cli::State, fzf, git, tmux};
 
 impl State {
     /// Lists configured projects.
+    ///
+    /// # Errors
+    ///
+    /// This currently does not fail, but returns `Result` to match CLI command
+    /// handler dispatch.
     pub fn list_projects(&self) -> Result<()> {
         let mut projects = self
             .config
@@ -25,6 +30,12 @@ impl State {
     }
 
     /// Loads a configured project, optionally opening a branch worktree.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command is run inside tmux, the project or
+    /// session template is not configured, the project path is invalid, git
+    /// worktree setup fails, or tmux cannot open the session.
     pub fn load_project(
         &self,
         project_name: &str,
@@ -57,6 +68,13 @@ impl State {
     }
 
     /// Opens a configured project, prompting for a local branch when available.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command is run inside tmux, the project or
+    /// session template is not configured, the project path is invalid, branch
+    /// selection fails, git worktree setup fails, or tmux cannot open the
+    /// session.
     pub fn open_project_interactive(
         &self,
         project_name: &str,

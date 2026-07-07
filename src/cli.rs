@@ -87,6 +87,10 @@ impl State {
     }
 
     /// Lists running tmux sessions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if tmux session listing fails.
     pub fn list(&self) -> Result<()> {
         tmux::list_sessions()?;
         Ok(())

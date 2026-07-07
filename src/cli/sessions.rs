@@ -15,6 +15,11 @@ enum PickTarget {
 
 impl State {
     /// Picks a tmux session or configured project and opens it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if listing sessions, selecting an item, attaching to
+    /// tmux, opening a project, or creating a project worktree fails.
     pub fn pick(&self, project: Option<&str>, session_override: Option<&str>) -> Result<()> {
         if let Some(project) = project {
             self.open_project_interactive(project, session_override)?;
@@ -36,6 +41,12 @@ impl State {
     }
 
     /// Opens an ad hoc directory with a configured session template.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command is run inside tmux, the session template
+    /// is not configured, the target directory cannot be resolved or validated,
+    /// or tmux cannot open the session.
     pub fn session(
         &self,
         path: Option<PathBuf>,
