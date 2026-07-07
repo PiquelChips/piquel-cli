@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
 use crate::{
-    Config, SessionConfig, WindowConfig, config,
+    Config, config,
     executor::{CommandExecutor, LocalCommandExecutor},
     tmux,
 };
@@ -104,7 +104,14 @@ impl State {
     ///
     /// Returns an error if tmux session listing fails.
     pub fn list(&self) -> Result<()> {
-        tmux::list_sessions()?;
+        let mut sessions = tmux::list_sessions(self.executor())?;
+        sessions.sort();
+        sessions.dedup();
+
+        for session in sessions {
+            println!("{session}");
+        }
+
         Ok(())
     }
 }

@@ -29,7 +29,7 @@ impl State {
         match self.pick_target()? {
             Some(PickTarget::TmuxSession(name)) => {
                 tmux::err_in_tmux()?;
-                tmux::attach(&name)?;
+                tmux::attach(self.executor(), &name)?;
             }
             Some(PickTarget::Project(name)) => {
                 self.open_project_interactive(&name, session_override)?;
@@ -85,7 +85,7 @@ impl State {
                 .into_owned(),
         };
 
-        tmux::open_session(&tmux_name, &root, template)?;
+        tmux::open_session(self.executor(), &tmux_name, &root, template)?;
         Ok(())
     }
 
@@ -95,10 +95,10 @@ impl State {
             .projects
             .iter()
             .filter_map(|project| project.resolved_name().ok());
-        let tmux_sessions = tmux::list_tmux_sessions()?;
+        let tmux_sessions = tmux::list_sessions(self.executor())?;
         let (items, mut targets) = build_pick_targets(tmux_sessions, project_names);
 
-        let Some(selection) = fzf::select(items, "piquel> ")? else {
+        let Some(selection) = self.select_fzf(items, "piquel> ")? else {
             return Ok(None);
         };
 
@@ -106,6 +106,13 @@ impl State {
             .remove(&selection)
             .map(Some)
             .ok_or_else(|| anyhow!("Selected unknown picker item \"{selection}\""))
+    }
+
+    pub(crate) fn select_fzf<I>(&self, items: I, prompt: &str) -> Result<Option<String>>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Ok(fzf::select(items, prompt)?)
     }
 }
 

@@ -194,8 +194,9 @@ with `eprintln!`, and running `fzf` so the user can make a selection.
 When adding code, use this rule:
 
 - If the command is part of accomplishing the requested operation, create a
-  `CommandRequest` in the owning module, usually `tmux` or `git`, and execute it
-  through `State::executor()`.
+  `CommandRequest` in the owning module, usually `tmux` or `git`. Higher-level
+  wrappers that need to run several commands should stay in that owning module
+  and take `&dyn CommandExecutor` as a parameter.
 - If the action exists to show information to the user or ask the user for a
   choice, perform it directly in the local process or through the feedback
   module, such as `fzf::select`.

@@ -4,6 +4,8 @@
 pub mod cli;
 /// JSON config loading.
 pub mod config;
+/// Command execution and user output abstraction.
+pub mod executor;
 /// Interactive fuzzy selection helpers.
 pub mod fzf;
 /// Git worktree discovery helpers.
