@@ -387,12 +387,16 @@ fn combined_output(output: &CommandOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::VecDeque, sync::Mutex};
 
     #[test]
     fn sanitizes_tmux_session_names() {
         assert_eq!(sanitize_session_name("project:branch"), "project_branch");
         assert_eq!(sanitize_session_name("feature/foo"), "feature_foo");
         assert_eq!(sanitize_session_name("feature///foo"), "feature_foo");
+        assert_eq!(sanitize_session_name("  feature/foo  "), "feature_foo");
+        assert_eq!(sanitize_session_name("release--2026"), "release--2026");
+        assert_eq!(sanitize_session_name("release__2026"), "release_2026");
         assert!(!sanitize_session_name("project:branch").contains(':'));
     }
 
@@ -401,5 +405,271 @@ mod tests {
         assert!(validated_session_name("").is_err());
         assert!(validated_session_name("   ").is_err());
         assert!(validated_session_name("///").is_err());
+    }
+
+    #[test]
+    fn valid_tmux_session_names_are_sanitized_during_validation() {
+        assert_eq!(
+            validated_session_name(" feature/foo:bar ").expect("name should validate"),
+            "feature_foo_bar"
+        );
+    }
+
+    #[test]
+    fn request_builders_construct_expected_tmux_commands() {
+        let window = WindowConfig {
+            name: Some("editor".to_owned()),
+            commands: vec!["vim .".to_owned(), "cargo test".to_owned()],
+        };
+
+        assert_eq!(
+            list_sessions_request(),
+            tmux_request(["list-sessions", "-F", "#{session_name}"])
+        );
+        assert_eq!(
+            attach_request("alpha"),
+            tmux_request(["attach", "-t", "alpha"])
+        );
+        assert_eq!(
+            new_session_request("alpha", Path::new("/repo")),
+            tmux_request(["new-session", "-d", "-c", "/repo", "-s", "alpha"])
+        );
+        assert_eq!(
+            list_windows_request("alpha"),
+            tmux_request(["list-windows", "-t", "alpha", "-F", "#{window_id}"])
+        );
+        assert_eq!(
+            new_window_request("alpha", Path::new("/repo"), &window),
+            tmux_request([
+                "new-window",
+                "-P",
+                "-F",
+                "#{window_id}",
+                "-n",
+                "editor",
+                "-t",
+                "alpha",
+                "-c",
+                "/repo"
+            ])
+        );
+        assert_eq!(
+            send_keys_request("@1", "cargo test"),
+            tmux_request(["send-keys", "-t", "@1", "cargo test", "Enter"])
+        );
+        assert_eq!(
+            kill_window_request("@0"),
+            tmux_request(["kill-window", "-t", "@0"])
+        );
+        assert_eq!(
+            select_window_request("@1"),
+            tmux_request(["select-window", "-t", "@1"])
+        );
+
+        let requests = send_keys_requests("@1", &window)
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requests,
+            vec![
+                send_keys_request("@1", "vim ."),
+                send_keys_request("@1", "cargo test")
+            ]
+        );
+    }
+
+    #[test]
+    fn list_sessions_treats_missing_tmux_server_as_empty() {
+        for message in [
+            "no server running on /tmp/tmux-1000/default\n",
+            "error connecting to /tmp/tmux-1000/default (No such file or directory)\n",
+        ] {
+            let output = command_output(1, b"", message.as_bytes());
+
+            assert!(
+                parse_list_sessions_output(&output)
+                    .expect("missing server should parse")
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn list_sessions_combines_stdout_and_stderr_on_unexpected_failure() {
+        let output = command_output(1, b"stdout\n", b"stderr\n");
+        let err = parse_list_sessions_output(&output).expect_err("failure should be returned");
+
+        assert!(err.to_string().contains("stdout"));
+        assert!(err.to_string().contains("stderr"));
+    }
+
+    #[test]
+    fn list_sessions_trims_only_outer_newlines() {
+        let output = command_output(0, b"alpha\nbeta\n", b"");
+
+        let sessions = parse_list_sessions_output(&output).expect("sessions should parse");
+
+        assert_eq!(sessions, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn successful_output_combines_streams_and_rejects_failures() {
+        let success = command_output(0, b"stdout", b"stderr");
+        assert_eq!(
+            successful_output(&success).expect("success should parse"),
+            "stdoutstderr"
+        );
+
+        let failure = command_output(1, b"stdout", b"stderr");
+        let err = successful_output(&failure).expect_err("failure should be returned");
+        assert_eq!(err.to_string(), "stdoutstderr");
+    }
+
+    #[test]
+    fn successful_statuses_rejects_first_failed_status() {
+        let err = successful_statuses(vec![status(0), status(1), status(0)])
+            .expect_err("failed status should be returned");
+
+        assert!(matches!(err, TmuxError::Command(_)));
+    }
+
+    #[test]
+    fn open_session_attaches_when_session_already_exists() {
+        let executor = RecordingExecutor::new(vec![
+            command_output(0, b"alpha\nbeta\n", b""),
+            command_output(0, b"", b""),
+        ]);
+        let template = SessionConfig {
+            windows: vec![WindowConfig {
+                name: None,
+                commands: vec!["should not run".to_owned()],
+            }],
+        };
+
+        open_session(&executor, "alpha", Path::new("/repo"), &template)
+            .expect("existing session should attach");
+
+        assert_eq!(
+            executor.output_requests(),
+            vec![list_sessions_request(), attach_request("alpha")]
+        );
+        assert!(executor.status_requests().is_empty());
+    }
+
+    #[test]
+    fn open_session_creates_windows_selects_first_and_attaches() {
+        let executor = RecordingExecutor::new(vec![
+            command_output(0, b"", b""),
+            command_output(0, b"@0\n", b""),
+            command_output(0, b"@1\n", b""),
+            command_output(0, b"", b""),
+            command_output(0, b"@2\n", b""),
+            command_output(0, b"", b""),
+            command_output(0, b"", b""),
+        ]);
+        let template = SessionConfig {
+            windows: vec![
+                WindowConfig {
+                    name: Some("editor".to_owned()),
+                    commands: vec!["vim .".to_owned()],
+                },
+                WindowConfig {
+                    name: None,
+                    commands: vec!["cargo test".to_owned()],
+                },
+            ],
+        };
+
+        open_session(&executor, "feature/foo", Path::new("/repo"), &template)
+            .expect("new session should be created");
+
+        assert_eq!(
+            executor.output_requests(),
+            vec![
+                list_sessions_request(),
+                list_windows_request("feature_foo"),
+                new_window_request("feature_foo", Path::new("/repo"), &template.windows[0]),
+                send_keys_request("@1", "vim ."),
+                new_window_request("feature_foo", Path::new("/repo"), &template.windows[1]),
+                send_keys_request("@2", "cargo test"),
+                attach_request("feature_foo"),
+            ]
+        );
+        assert_eq!(
+            executor.status_requests(),
+            vec![
+                new_session_request("feature_foo", Path::new("/repo")),
+                kill_window_request("@0"),
+                select_window_request("@1"),
+            ]
+        );
+    }
+
+    struct RecordingExecutor {
+        output_responses: Mutex<VecDeque<CommandOutput>>,
+        output_requests: Mutex<Vec<CommandRequest>>,
+        status_requests: Mutex<Vec<CommandRequest>>,
+    }
+
+    impl RecordingExecutor {
+        fn new(output_responses: Vec<CommandOutput>) -> Self {
+            Self {
+                output_responses: Mutex::new(output_responses.into()),
+                output_requests: Mutex::new(Vec::new()),
+                status_requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn output_requests(&self) -> Vec<CommandRequest> {
+            self.output_requests
+                .lock()
+                .expect("requests lock should not be poisoned")
+                .clone()
+        }
+
+        fn status_requests(&self) -> Vec<CommandRequest> {
+            self.status_requests
+                .lock()
+                .expect("requests lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl CommandExecutor for RecordingExecutor {
+        fn output(&self, request: CommandRequest) -> Result<CommandOutput, CommandExecutorError> {
+            self.output_requests
+                .lock()
+                .expect("requests lock should not be poisoned")
+                .push(request);
+            Ok(self
+                .output_responses
+                .lock()
+                .expect("responses lock should not be poisoned")
+                .pop_front()
+                .expect("test output response should exist"))
+        }
+
+        fn status(&self, request: CommandRequest) -> Result<ExitStatus, CommandExecutorError> {
+            self.status_requests
+                .lock()
+                .expect("requests lock should not be poisoned")
+                .push(request);
+            Ok(status(0))
+        }
+    }
+
+    fn command_output(code: i32, stdout: &[u8], stderr: &[u8]) -> CommandOutput {
+        CommandOutput {
+            status: status(code),
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn status(code: i32) -> ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+
+        ExitStatus::from_raw(code << 8)
     }
 }

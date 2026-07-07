@@ -384,6 +384,8 @@ mod tests {
             ("git@github.com:owner/repo.git", "repo"),
             ("https://github.com/owner/repo.git", "repo"),
             ("https://github.com/owner/repo", "repo"),
+            ("ssh://git@example.com/owner/repo.git/", "repo"),
+            ("  https://github.com/owner/repo.git///  ", "repo"),
         ] {
             let project = ProjectConfig {
                 repository: repository.to_owned(),
@@ -397,6 +399,23 @@ mod tests {
                     .resolved_name()
                     .expect("project name should resolve"),
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_repository_basename_fails_project_name_resolution() {
+        for repository in ["", "   ", "git@example.com:owner/.."] {
+            let project = ProjectConfig {
+                repository: repository.to_owned(),
+                name: None,
+                path: None,
+                default_session: None,
+            };
+
+            assert!(
+                project.resolved_name().is_err(),
+                "{repository:?} should not resolve to a safe project name"
             );
         }
     }
@@ -437,6 +456,24 @@ mod tests {
         };
 
         assert!(config.validate_and_normalize().is_err());
+    }
+
+    #[test]
+    fn invalid_session_template_names_fail_validation() {
+        for name in ["", "   ", "project:branch"] {
+            let mut config = Config {
+                projects_dir: PathBuf::from("~/Projects"),
+                worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
+                default_session: name.to_owned(),
+                sessions: HashMap::from([(name.to_owned(), session())]),
+                projects: vec![],
+            };
+
+            assert!(
+                config.validate_and_normalize().is_err(),
+                "{name:?} should be rejected as a template name"
+            );
+        }
     }
 
     #[test]
@@ -561,6 +598,70 @@ mod tests {
         assert_eq!(
             config.projects[0].path,
             Some(PathBuf::from("/tmp/projects/repo"))
+        );
+    }
+
+    #[test]
+    fn project_lookup_returns_normalized_project_data() {
+        let mut config = config_with_default();
+        config.projects_dir = PathBuf::from("/tmp/projects");
+        config.projects.push(ProjectConfig {
+            repository: "git@github.com:owner/repo.git".to_owned(),
+            name: None,
+            path: None,
+            default_session: Some(ProjectSessionConfig::Template("default".to_owned())),
+        });
+
+        config
+            .validate_and_normalize()
+            .expect("config should validate");
+        let project = config.project("repo").expect("project should exist");
+
+        assert_eq!(project.repository, "git@github.com:owner/repo.git");
+        assert_eq!(project.name, "repo");
+        assert_eq!(project.path, PathBuf::from("/tmp/projects/repo"));
+        assert_eq!(
+            project.default_session,
+            ProjectSessionConfig::Template("default".to_owned())
+        );
+    }
+
+    #[test]
+    fn project_session_template_prefers_override_then_project_default() {
+        let mut config = config_with_default();
+        config.sessions.insert(
+            "rust".to_owned(),
+            SessionConfig {
+                windows: vec![WindowConfig {
+                    name: Some("rust".to_owned()),
+                    commands: vec!["cargo check".to_owned()],
+                }],
+            },
+        );
+        config.projects.push(ProjectConfig {
+            repository: "git@github.com:owner/repo.git".to_owned(),
+            name: None,
+            path: None,
+            default_session: Some(ProjectSessionConfig::Template("rust".to_owned())),
+        });
+        config
+            .validate_and_normalize()
+            .expect("config should validate");
+        let project = config.project("repo").expect("project should exist");
+
+        let default = config
+            .project_session_template(&project, None)
+            .expect("project default should resolve");
+        let override_template = config
+            .project_session_template(&project, Some("default"))
+            .expect("override should resolve");
+
+        assert_eq!(default.windows[0].name.as_deref(), Some("rust"));
+        assert_eq!(override_template.windows[0].name, None);
+        assert!(
+            config
+                .project_session_template(&project, Some("missing"))
+                .is_none()
         );
     }
 

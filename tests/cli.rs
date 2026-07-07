@@ -3,10 +3,13 @@
 use std::{
     ffi::OsStr,
     fmt::Write as _,
-    fs,
+    fs::{self, File},
+    io::Write as _,
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicUsize, Ordering},
+    thread,
+    time::Duration,
 };
 
 static NEXT_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
@@ -81,9 +84,9 @@ fn shell_path() -> PathBuf {
     std::env::var_os("PATH")
         .into_iter()
         .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .map(|path| path.join("sh"))
+        .flat_map(|path| [path.join("sh"), path.join("bash")])
         .find(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
+        .expect("test shell should be available in PATH")
 }
 
 fn shell_quote(value: &str) -> String {
@@ -91,7 +94,12 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn write_executable(path: &Path, contents: &str) {
-    fs::write(path, contents).expect("test executable should be written");
+    {
+        let mut file = File::create(path).expect("test executable should be created");
+        file.write_all(contents.as_bytes())
+            .expect("test executable should be written");
+        file.sync_all().expect("test executable should be synced");
+    }
 
     #[cfg(unix)]
     {
@@ -99,6 +107,8 @@ fn write_executable(path: &Path, contents: &str) {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))
             .expect("test executable should be executable");
     }
+
+    thread::sleep(Duration::from_millis(10));
 }
 
 fn bin_dir_with(temp: &TestDir, binaries: &[(&str, String)]) -> PathBuf {
@@ -350,6 +360,28 @@ fn config_for_alpha_project(
     )
 }
 
+fn config_for_session_commands(temp: &TestDir, commands: &[&str]) -> PathBuf {
+    let commands = commands
+        .iter()
+        .map(|command| serde_json::to_string(command).expect("command should serialize"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    write_config(
+        temp,
+        &format!(
+            r#"{{
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": [{commands}] }}] }},
+                    "alt": {{ "windows": [{{ "name": "alt-window", "commands": ["alt cmd"] }}] }}
+                }},
+                "projects": []
+            }}"#
+        ),
+    )
+}
+
 #[test]
 fn project_list_prints_sorted_configured_projects() {
     let temp = TestDir::new();
@@ -462,7 +494,53 @@ fn unsafe_project_name_exits_with_validation_error() {
 }
 
 #[test]
-fn project_load_declining_missing_project_clone_does_not_open_tmux_session() {
+fn duplicate_project_names_exit_with_validation_error() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        r#"{
+            "projects_dir": "/tmp/projects",
+            "default_session": "default",
+            "sessions": {
+                "default": { "windows": [{ "commands": [] }] }
+            },
+            "projects": [
+                { "repository": "https://github.com/owner/alpha.git" },
+                { "repository": "git@github.com:other/alpha.git" }
+            ]
+        }"#,
+    );
+
+    let output = run(["--config", path_str(&config), "project", "list"]);
+
+    assert_failure(&output, &["Duplicate project name \"alpha\""]);
+}
+
+#[test]
+fn unknown_default_session_exits_with_validation_error() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        r#"{
+            "projects_dir": "/tmp/projects",
+            "default_session": "missing",
+            "sessions": {
+                "default": { "windows": [{ "commands": [] }] }
+            },
+            "projects": []
+        }"#,
+    );
+
+    let output = run(["--config", path_str(&config), "project", "list"]);
+
+    assert_failure(
+        &output,
+        &["Default session template \"missing\" does not exist"],
+    );
+}
+
+#[test]
+fn project_load_rejects_missing_project_path_before_opening_tmux_session() {
     let temp = TestDir::new();
     let config = write_config(
         &temp,
@@ -662,6 +740,107 @@ fn project_load_creates_tmux_session_from_configured_template() {
 }
 
 #[test]
+fn project_load_uses_project_inline_default_session() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let tmux_log = temp.path().join("tmux.log");
+    let config = write_config(
+        &temp,
+        &format!(
+            r#"{{
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": ["global cmd"] }}] }}
+                }},
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git",
+                        "path": {},
+                        "default_session": {{
+                            "windows": [
+                                {{ "name": "inline", "commands": ["inline cmd"] }}
+                            ]
+                        }}
+                    }}
+                ]
+            }}"#,
+            serde_json::to_string(path_str(&project_path)).expect("path should serialize")
+        ),
+    );
+    let bin = bin_dir_with(&temp, &[("tmux", fake_tmux_script(&tmux_log, ""))]);
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "project", "load", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("new-window -P -F #{window_id} -n inline -t alpha"));
+    assert!(log.contains("send-keys -t window-id inline cmd Enter"));
+    assert!(!log.contains("global cmd"));
+}
+
+#[test]
+fn project_load_session_override_uses_named_template_over_project_default() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let tmux_log = temp.path().join("tmux.log");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+    let bin = bin_dir_with(&temp, &[("tmux", fake_tmux_script(&tmux_log, ""))]);
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "project",
+            "load",
+            "alpha",
+            "--session",
+            "rust",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("send-keys -t window-id cargo check Enter"));
+    assert!(!log.contains("send-keys -t window-id default cmd Enter"));
+}
+
+#[test]
+fn project_load_unknown_session_override_exits_before_tmux() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .args([
+            "--config",
+            path_str(&config),
+            "project",
+            "load",
+            "alpha",
+            "--session",
+            "missing",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(&output, &["Session template \"missing\" is not configured"]);
+}
+
+#[test]
 fn session_dot_path_uses_current_directory_name() {
     let temp = TestDir::new();
     let session_path = temp.path().join("workspaces/alpha");
@@ -807,6 +986,53 @@ fn project_load_worktree_opens_requested_branch_worktree() {
 }
 
 #[test]
+fn project_load_worktree_rejects_non_local_branch() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let config = config_for_alpha_project(&temp, &project_path, None);
+    let bin = bin_dir_with(
+        &temp,
+        &[(
+            "git",
+            fake_git_script(
+                "main\n",
+                &format!(
+                    "\
+worktree {}
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main
+
+",
+                    path_str(&project_path)
+                ),
+                None,
+            ),
+        )],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "project",
+            "load",
+            "alpha",
+            "--worktree",
+            "feature/missing",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(
+        &output,
+        &["Branch \"feature/missing\" is not a local branch for project \"alpha\""],
+    );
+}
+
+#[test]
 fn project_load_worktree_creates_missing_managed_worktree() {
     let temp = TestDir::new();
     let project_path = temp.path().join("projects/alpha");
@@ -871,6 +1097,165 @@ branch refs/heads/main
 }
 
 #[test]
+fn project_load_inside_tmux_is_rejected_before_project_lookup() {
+    let temp = TestDir::new();
+    let config = config_with_projects(&temp);
+
+    let output = piquel()
+        .env("TMUX", "/tmp/tmux")
+        .args(["--config", path_str(&config), "project", "load", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(&output, &["Please do not use this command in tmux"]);
+}
+
+#[test]
+fn session_opens_directory_with_default_template_and_name_override() {
+    let temp = TestDir::new();
+    let root = temp.path().join("workspace dir");
+    fs::create_dir(&root).expect("session root should be created");
+    let tmux_log = temp.path().join("tmux.log");
+    let config = config_for_session_commands(&temp, &["echo default"]);
+    let bin = bin_dir_with(&temp, &[("tmux", fake_tmux_script(&tmux_log, ""))]);
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "session",
+            path_str(&root),
+            "--name",
+            "custom:name",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains(&format!(
+        "new-session -d -c {} -s custom_name",
+        path_str(&root)
+    )));
+    assert!(log.contains("send-keys -t window-id echo default Enter"));
+}
+
+#[test]
+fn session_alias_uses_requested_template_and_derived_directory_name() {
+    let temp = TestDir::new();
+    let root = temp.path().join("workspace");
+    fs::create_dir(&root).expect("session root should be created");
+    let tmux_log = temp.path().join("tmux.log");
+    let config = config_for_session_commands(&temp, &["echo default"]);
+    let bin = bin_dir_with(&temp, &[("tmux", fake_tmux_script(&tmux_log, ""))]);
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "s",
+            path_str(&root),
+            "--session",
+            "alt",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains(&format!(
+        "new-session -d -c {} -s workspace",
+        path_str(&root)
+    )));
+    assert!(log.contains("new-window -P -F #{window_id} -n alt-window -t workspace"));
+    assert!(log.contains("send-keys -t window-id alt cmd Enter"));
+    assert!(!log.contains("echo default"));
+}
+
+#[test]
+fn session_existing_tmux_session_attaches_without_creating_windows() {
+    let temp = TestDir::new();
+    let root = temp.path().join("workspace");
+    fs::create_dir(&root).expect("session root should be created");
+    let tmux_log = temp.path().join("tmux.log");
+    let config = config_for_session_commands(&temp, &["echo default"]);
+    let bin = bin_dir_with(
+        &temp,
+        &[("tmux", fake_tmux_script(&tmux_log, "workspace\n"))],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "session", path_str(&root)])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("attach -t workspace"));
+    assert!(!log.contains("new-session"));
+    assert!(!log.contains("new-window"));
+}
+
+#[test]
+fn session_rejects_missing_path_file_path_and_unknown_template() {
+    let temp = TestDir::new();
+    let config = config_for_session_commands(&temp, &["echo default"]);
+    let file_path = temp.path().join("file.txt");
+    fs::write(&file_path, "not a directory").expect("test file should be written");
+    let missing_path = temp.path().join("missing");
+
+    let missing_output = piquel()
+        .env_remove("TMUX")
+        .args([
+            "--config",
+            path_str(&config),
+            "session",
+            path_str(&missing_path),
+        ])
+        .output()
+        .expect("piquel should run");
+    assert_failure(&missing_output, &["Session path", "does not exist"]);
+
+    let file_output = piquel()
+        .env_remove("TMUX")
+        .args([
+            "--config",
+            path_str(&config),
+            "session",
+            path_str(&file_path),
+        ])
+        .output()
+        .expect("piquel should run");
+    assert_failure(&file_output, &["Session path", "is not a directory"]);
+
+    let template_output = piquel()
+        .env_remove("TMUX")
+        .args([
+            "--config",
+            path_str(&config),
+            "session",
+            path_str(temp.path()),
+            "--session",
+            "missing",
+        ])
+        .output()
+        .expect("piquel should run");
+    assert_failure(
+        &template_output,
+        &["Session template \"missing\" is not configured"],
+    );
+}
+
+#[test]
 fn pick_routes_fzf_tmux_selection_to_attach() {
     let temp = TestDir::new();
     let config = config_with_projects(&temp);
@@ -899,6 +1284,42 @@ fn pick_routes_fzf_tmux_selection_to_attach() {
     let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
     assert!(log.contains("list-sessions -F #{session_name}"));
     assert!(log.contains("attach -t beta"));
+}
+
+#[test]
+fn pick_cancelled_selection_exits_successfully_without_attach() {
+    let temp = TestDir::new();
+    let config = config_with_projects(&temp);
+    let tmux_log = temp.path().join("tmux.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "beta\n")),
+            (
+                "fzf",
+                format!(
+                    r"#!{}
+cat >/dev/null
+exit 130
+",
+                    path_str(&shell_path())
+                ),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("list-sessions -F #{session_name}"));
+    assert!(!log.contains("attach -t beta"));
 }
 
 #[test]
