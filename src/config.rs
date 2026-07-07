@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::Config;
+use crate::{Config, backend::Backend};
 use thiserror::Error;
 
 /// Errors produced while loading or accessing the CLI config.
@@ -15,6 +15,9 @@ pub enum ConfigError {
     /// The parsed config failed semantic validation.
     #[error("{0}")]
     Validation(String),
+    /// A backend operation failed while normalizing config.
+    #[error("{0}")]
+    Backend(#[from] crate::backend::BackendError),
 }
 
 /// Loads the JSON config from `config_path`.
@@ -23,11 +26,11 @@ pub enum ConfigError {
 ///
 /// Returns an error if the file cannot be read, the JSON cannot be parsed, or
 /// validation fails.
-pub fn load_config(config_path: &Path) -> Result<Config, ConfigError> {
+pub fn load_config(config_path: &Path, backend: &dyn Backend) -> Result<Config, ConfigError> {
     let config_file = std::fs::read_to_string(config_path)
         .map_err(|_| ConfigError::FileNotFound(config_path.to_owned()))?;
 
     let mut parsed: Config = serde_json::from_str(&config_file).map_err(ConfigError::ParseError)?;
-    parsed.validate_and_normalize()?;
+    parsed.validate_and_normalize(backend)?;
     Ok(parsed)
 }

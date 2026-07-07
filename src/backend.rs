@@ -1,10 +1,14 @@
 use std::{
     ffi::{OsStr, OsString},
-    io::{self, Write},
+    io,
+    path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
 };
 
 use thiserror::Error;
+
+mod local;
+pub use local::LocalBackend;
 
 /// Standard input configuration for an executed command.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -16,6 +20,16 @@ pub enum CommandInput {
     Inherit,
     /// Pipe bytes into command stdin.
     Bytes(Vec<u8>),
+}
+
+impl From<CommandInput> for Stdio {
+    fn from(value: CommandInput) -> Self {
+        match value {
+            CommandInput::Closed => Self::null(),
+            CommandInput::Inherit => Self::inherit(),
+            CommandInput::Bytes(_) => Self::piped(),
+        }
+    }
 }
 
 /// Command execution request.
@@ -134,104 +148,121 @@ pub struct CommandOutput {
     pub stderr: Vec<u8>,
 }
 
-/// Errors produced by a command executor.
+/// Errors produced by a backend.
 #[derive(Debug, Error)]
-pub enum CommandExecutorError {
+pub enum BackendError {
     /// The command process could not be spawned or observed.
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
+    /// The backend could not determine a home directory.
+    #[error("home directory not found")]
+    HomeDirNotFound,
+    /// The requested program is not available to this backend.
+    #[error("{0} is not installed or not available in PATH")]
+    MissingProgram(String),
 }
 
-/// Runs commands requested by the CLI.
-pub trait CommandExecutor: Send + Sync {
+/// Performs machine interactions requested by the CLI.
+pub trait Backend: Send + Sync {
     /// Executes `request` and captures stdout and stderr.
     ///
     /// # Errors
     ///
     /// Returns an error if the command cannot be spawned or observed.
-    fn output(&self, request: CommandRequest) -> Result<CommandOutput, CommandExecutorError>;
+    fn output(&self, request: CommandRequest) -> Result<CommandOutput, BackendError>;
 
     /// Executes `request` while inheriting stdout and stderr.
     ///
     /// # Errors
     ///
     /// Returns an error if the command cannot be spawned or observed.
-    fn status(&self, request: CommandRequest) -> Result<ExitStatus, CommandExecutorError>;
+    fn status(&self, request: CommandRequest) -> Result<ExitStatus, BackendError>;
 
     /// Executes each request in order while inheriting stdout and stderr.
     ///
     /// # Errors
     ///
     /// Returns an error if any command cannot be spawned or observed.
-    fn statuses(&self, requests: CommandRequests) -> Result<Vec<ExitStatus>, CommandExecutorError> {
+    fn statuses(&self, requests: CommandRequests) -> Result<Vec<ExitStatus>, BackendError> {
         requests
             .into_iter()
             .map(|request| self.status(request))
             .collect()
     }
-}
 
-/// Local process-backed command executor.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct LocalCommandExecutor;
+    /// Returns the backend user's home directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot determine a home directory.
+    fn home_dir(&self) -> Result<PathBuf, BackendError>;
 
-impl CommandExecutor for LocalCommandExecutor {
-    fn output(&self, request: CommandRequest) -> Result<CommandOutput, CommandExecutorError> {
-        let stdin = request.stdin_config().clone();
-        let mut child = Command::from(request)
-            .stdin(stdin_stdio(&stdin))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+    /// Returns the backend's current directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the current directory cannot be determined.
+    fn current_dir(&self) -> Result<PathBuf, BackendError>;
 
-        write_stdin(&mut child, &stdin)?;
-
-        let output = child.wait_with_output()?;
-
-        Ok(CommandOutput {
-            status: output.status,
-            stdout: output.stdout,
-            stderr: output.stderr,
-        })
-    }
-
-    fn status(&self, request: CommandRequest) -> Result<ExitStatus, CommandExecutorError> {
-        let stdin = request.stdin_config().clone();
-        let mut child = Command::from(request)
-            .stdin(stdin_stdio(&stdin))
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn()?;
-
-        write_stdin(&mut child, &stdin)?;
-
-        child.wait().map_err(CommandExecutorError::Io)
-    }
-}
-
-fn stdin_stdio(stdin: &CommandInput) -> Stdio {
-    match stdin {
-        CommandInput::Closed => Stdio::null(),
-        CommandInput::Inherit => Stdio::inherit(),
-        CommandInput::Bytes(_) => Stdio::piped(),
-    }
-}
-
-fn write_stdin(
-    child: &mut std::process::Child,
-    stdin: &CommandInput,
-) -> Result<(), CommandExecutorError> {
-    if let CommandInput::Bytes(input) = stdin
-        && let Some(mut child_stdin) = child.stdin.take()
-    {
-        match child_stdin.write_all(input) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {}
-            Err(error) => return Err(CommandExecutorError::Io(error)),
+    /// Expands a leading `~` using the backend user's home directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if expansion requires a home directory and none is
+    /// available.
+    fn expand_home(&self, path: &Path) -> Result<PathBuf, BackendError> {
+        if let Ok(stripped) = path.strip_prefix("~") {
+            return Ok(self.home_dir()?.join(stripped));
         }
+
+        Ok(path.to_path_buf())
     }
 
-    Ok(())
+    /// Returns whether `path` exists on the backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot query the path.
+    fn path_exists(&self, path: &Path) -> Result<bool, BackendError>;
+
+    /// Returns whether `path` is a directory on the backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend cannot query the path.
+    fn path_is_dir(&self, path: &Path) -> Result<bool, BackendError>;
+
+    /// Creates `path` and any missing parent directories on the backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created.
+    fn create_dir_all(&self, path: &Path) -> Result<(), BackendError>;
+
+    /// Canonicalizes `path` on the backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the path cannot be canonicalized.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, BackendError>;
+
+    /// Validates that `program` is available to this backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the program cannot be found.
+    fn validate_program(&self, program: &OsStr) -> Result<(), BackendError>;
+}
+
+#[cfg(test)]
+fn shell() -> OsString {
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .flat_map(|path| [path.join("sh"), path.join("bash")])
+        .find(|path| path.exists())
+        .expect("test shell should be available in PATH")
+        .into_os_string()
 }
 
 #[cfg(test)]
@@ -281,8 +312,8 @@ mod tests {
 
     #[test]
     fn default_statuses_runs_requests_in_order() {
-        let executor = RecordingExecutor::default();
-        let statuses = executor
+        let backend = RecordingBackend::default();
+        let statuses = backend
             .statuses({
                 let mut requests = CommandRequests::new();
                 requests.push(CommandRequest::new("first"));
@@ -294,41 +325,17 @@ mod tests {
         assert_eq!(statuses.len(), 2);
         assert!(statuses.iter().all(ExitStatus::success));
         assert_eq!(
-            executor.programs(),
+            backend.programs(),
             vec![OsString::from("first"), OsString::from("second")]
         );
     }
 
-    #[test]
-    fn local_executor_pipes_bytes_to_output_command() {
-        let output = LocalCommandExecutor
-            .output(
-                CommandRequest::new(shell())
-                    .args(["-c", "cat; printf err >&2"])
-                    .stdin(CommandInput::Bytes(b"hello".to_vec())),
-            )
-            .expect("shell command should run");
-
-        assert!(output.status.success());
-        assert_eq!(output.stdout, b"hello");
-        assert_eq!(output.stderr, b"err");
-    }
-
-    #[test]
-    fn local_executor_status_reports_exit_code() {
-        let status = LocalCommandExecutor
-            .status(CommandRequest::new(shell()).args(["-c", "exit 7"]))
-            .expect("shell command should run");
-
-        assert_eq!(status.code(), Some(7));
-    }
-
     #[derive(Default)]
-    struct RecordingExecutor {
+    struct RecordingBackend {
         programs: Mutex<Vec<OsString>>,
     }
 
-    impl RecordingExecutor {
+    impl RecordingBackend {
         fn programs(&self) -> Vec<OsString> {
             self.programs
                 .lock()
@@ -337,28 +344,46 @@ mod tests {
         }
     }
 
-    impl CommandExecutor for RecordingExecutor {
-        fn output(&self, _request: CommandRequest) -> Result<CommandOutput, CommandExecutorError> {
+    impl Backend for RecordingBackend {
+        fn output(&self, _request: CommandRequest) -> Result<CommandOutput, BackendError> {
             panic!("output should not be called by statuses")
         }
 
-        fn status(&self, request: CommandRequest) -> Result<ExitStatus, CommandExecutorError> {
+        fn status(&self, request: CommandRequest) -> Result<ExitStatus, BackendError> {
             self.programs
                 .lock()
                 .expect("program lock should not be poisoned")
                 .push(request.program);
             Ok(status(0))
         }
-    }
 
-    fn shell() -> OsString {
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-            .flat_map(|path| [path.join("sh"), path.join("bash")])
-            .find(|path| path.exists())
-            .expect("test shell should be available in PATH")
-            .into_os_string()
+        fn home_dir(&self) -> Result<PathBuf, BackendError> {
+            Ok(PathBuf::from("/home/test"))
+        }
+
+        fn current_dir(&self) -> Result<PathBuf, BackendError> {
+            Ok(PathBuf::from("/repo"))
+        }
+
+        fn path_exists(&self, _path: &Path) -> Result<bool, BackendError> {
+            Ok(true)
+        }
+
+        fn path_is_dir(&self, _path: &Path) -> Result<bool, BackendError> {
+            Ok(true)
+        }
+
+        fn create_dir_all(&self, _path: &Path) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        fn canonicalize(&self, path: &Path) -> Result<PathBuf, BackendError> {
+            Ok(path.to_path_buf())
+        }
+
+        fn validate_program(&self, _program: &OsStr) -> Result<(), BackendError> {
+            Ok(())
+        }
     }
 
     #[cfg(unix)]

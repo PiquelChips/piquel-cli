@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{cli::State, fzf, tmux};
+use crate::{backend::Backend, cli::State, fzf, tmux};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PickTarget {
@@ -29,7 +29,7 @@ impl State {
         match self.pick_target()? {
             Some(PickTarget::TmuxSession(name)) => {
                 tmux::err_in_tmux()?;
-                tmux::attach(self.executor(), &name)?;
+                tmux::attach(self.backend(), &name)?;
             }
             Some(PickTarget::Project(name)) => {
                 self.open_project_interactive(&name, session_override)?;
@@ -61,13 +61,13 @@ impl State {
             .session_template(template_name)
             .ok_or_else(|| anyhow!("Session template \"{template_name}\" is not configured"))?;
 
-        let root = resolve_session_root(path)?;
+        let root = resolve_session_root(self.backend(), path)?;
 
-        if !root.exists() {
+        if !self.backend().path_exists(&root)? {
             bail!("Session path {} does not exist", root.display());
         }
 
-        if !root.is_dir() {
+        if !self.backend().path_is_dir(&root)? {
             bail!("Session path {} is not a directory", root.display());
         }
 
@@ -82,7 +82,7 @@ impl State {
                 .into_owned(),
         };
 
-        tmux::open_session(self.executor(), &tmux_name, &root, template)?;
+        tmux::open_session(self.backend(), &tmux_name, &root, template)?;
         Ok(())
     }
 
@@ -92,7 +92,7 @@ impl State {
             .projects
             .iter()
             .filter_map(|project| project.resolved_name().ok());
-        let tmux_sessions = tmux::list_sessions(self.executor())?;
+        let tmux_sessions = tmux::list_sessions(self.backend())?;
         let (items, mut targets) = build_pick_targets(tmux_sessions, project_names);
 
         let Some(selection) = Self::select_fzf(items, "piquel> ")? else {
@@ -113,22 +113,15 @@ impl State {
     }
 }
 
-fn expand_home(path: &Path) -> PathBuf {
-    if let Ok(stripped) = path.strip_prefix("~")
-        && let Some(home) = std::env::home_dir()
-    {
-        return home.join(stripped);
-    }
-    path.to_path_buf()
-}
-
-fn resolve_session_root(path: Option<&Path>) -> Result<PathBuf> {
+fn resolve_session_root(backend: &dyn Backend, path: Option<&Path>) -> Result<PathBuf> {
     match path {
-        Some(path) if path == Path::new(".") => {
-            std::env::current_dir().context("Failed to determine current directory")
-        }
-        Some(path) => Ok(expand_home(path)),
-        None => std::env::current_dir().context("Failed to determine current directory"),
+        Some(path) if path == Path::new(".") => backend
+            .current_dir()
+            .context("Failed to determine current directory"),
+        Some(path) => Ok(backend.expand_home(path)?),
+        None => backend
+            .current_dir()
+            .context("Failed to determine current directory"),
     }
 }
 

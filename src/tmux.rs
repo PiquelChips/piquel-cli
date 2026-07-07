@@ -1,8 +1,7 @@
 use crate::{
     SessionConfig, WindowConfig,
-    executor::{
-        CommandExecutor, CommandExecutorError, CommandInput, CommandOutput, CommandRequest,
-        CommandRequests,
+    backend::{
+        Backend, BackendError, CommandInput, CommandOutput, CommandRequest, CommandRequests,
     },
 };
 use std::io;
@@ -16,6 +15,9 @@ pub enum TmuxError {
     /// The tmux process could not be spawned or observed.
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
+    /// A backend operation failed.
+    #[error("{0}")]
+    Backend(BackendError),
     /// tmux exited unsuccessfully or returned an unexpected response.
     #[error("{0}")]
     Command(String),
@@ -27,10 +29,11 @@ pub enum TmuxError {
     InvalidSessionName(String),
 }
 
-impl From<CommandExecutorError> for TmuxError {
-    fn from(value: CommandExecutorError) -> Self {
+impl From<BackendError> for TmuxError {
+    fn from(value: BackendError) -> Self {
         match value {
-            CommandExecutorError::Io(err) => TmuxError::Io(err),
+            BackendError::Io(err) => TmuxError::Io(err),
+            error => TmuxError::Backend(error),
         }
     }
 }
@@ -41,13 +44,13 @@ pub fn list_sessions_request() -> CommandRequest {
     tmux_request(["list-sessions", "-F", "#{session_name}"])
 }
 
-/// Lists running tmux sessions through `executor`.
+/// Lists running tmux sessions through `backend`.
 ///
 /// # Errors
 ///
 /// Returns an error if tmux cannot be invoked or returns an unexpected failure.
-pub fn list_sessions(executor: &dyn CommandExecutor) -> Result<Vec<String>, TmuxError> {
-    let output = executor.output(list_sessions_request())?;
+pub fn list_sessions(backend: &dyn Backend) -> Result<Vec<String>, TmuxError> {
+    let output = backend.output(list_sessions_request())?;
     parse_list_sessions_output(&output)
 }
 
@@ -85,13 +88,13 @@ pub fn attach_request(session: &str) -> CommandRequest {
     tmux_request(["attach", "-t", session])
 }
 
-/// Attaches to an existing tmux session through `executor`.
+/// Attaches to an existing tmux session through `backend`.
 ///
 /// # Errors
 ///
 /// Returns an error if tmux cannot attach to the requested session.
-pub fn attach(executor: &dyn CommandExecutor, name: &str) -> Result<String, TmuxError> {
-    let output = executor.output(attach_request(name))?;
+pub fn attach(backend: &dyn Backend, name: &str) -> Result<String, TmuxError> {
+    let output = backend.output(attach_request(name))?;
     successful_output(&output)
 }
 
@@ -172,20 +175,20 @@ pub fn select_window_request(window_id: &str) -> CommandRequest {
 ///
 /// Returns an error if the session name is invalid or any tmux command fails.
 pub fn open_session(
-    executor: &dyn CommandExecutor,
+    backend: &dyn Backend,
     tmux_name: &str,
     root: &Path,
     template: &SessionConfig,
 ) -> Result<(), TmuxError> {
     let tmux_name = validated_session_name(tmux_name)?;
 
-    let sessions = list_sessions(executor)?;
+    let sessions = list_sessions(backend)?;
     if sessions.contains(&tmux_name) {
-        attach(executor, &tmux_name)?;
+        attach(backend, &tmux_name)?;
         return Ok(());
     }
 
-    let status = executor
+    let status = backend
         .status(new_session_request(&tmux_name, root))
         .map_err(|_| {
             TmuxError::Command(format!("Failed to create session with name {tmux_name}"))
@@ -194,7 +197,7 @@ pub fn open_session(
         TmuxError::Command(format!("Failed to create session with name {tmux_name}"))
     })?;
 
-    let output = executor
+    let output = backend
         .output(list_windows_request(&tmux_name))
         .map_err(|e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")))?;
     let bootstrap_window = successful_output(&output)
@@ -203,28 +206,28 @@ pub fn open_session(
     let mut first_window = None;
 
     for (i, window) in template.windows.iter().enumerate() {
-        let window_id = create_window(executor, &tmux_name, root, window).map_err(|e| {
+        let window_id = create_window(backend, &tmux_name, root, window).map_err(|e| {
             TmuxError::Command(format!("Failed to create window {} with error: {e}", i + 1))
         })?;
 
         first_window.get_or_insert(window_id);
     }
 
-    let status = executor
+    let status = backend
         .status(kill_window_request(&bootstrap_window))
         .map_err(|_| TmuxError::Command("Failed to kill first window".to_owned()))?;
     successful_status(status)
         .map_err(|_| TmuxError::Command("Failed to kill first window".to_owned()))?;
 
     if let Some(first_window) = first_window {
-        let status = executor
+        let status = backend
             .status(select_window_request(&first_window))
             .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
         successful_status(status)
             .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
     }
 
-    attach(executor, &tmux_name).map_err(|_| {
+    attach(backend, &tmux_name).map_err(|_| {
         TmuxError::Command(format!(
             "Failed to attach to session with error: {tmux_name}"
         ))
@@ -348,12 +351,12 @@ fn tmux_request<'a>(args: impl IntoIterator<Item = &'a str>) -> CommandRequest {
 }
 
 fn create_window(
-    executor: &dyn CommandExecutor,
+    backend: &dyn Backend,
     session_name: &str,
     start_dir: &Path,
     window: &WindowConfig,
 ) -> Result<String, TmuxError> {
-    let output = executor
+    let output = backend
         .output(new_window_request(session_name, start_dir, window))
         .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
     let window_id = successful_output(&output)
@@ -361,7 +364,7 @@ fn create_window(
     let window_id = window_id.trim_matches('\n').to_owned();
 
     for command in &window.commands {
-        let output = executor
+        let output = backend
             .output(send_keys_request(&window_id, command))
             .map_err(|e| {
                 TmuxError::Command(format!(
@@ -535,7 +538,7 @@ mod tests {
 
     #[test]
     fn open_session_attaches_when_session_already_exists() {
-        let executor = RecordingExecutor::new(vec![
+        let backend = RecordingBackend::new(vec![
             command_output(0, b"alpha\nbeta\n", b""),
             command_output(0, b"", b""),
         ]);
@@ -546,19 +549,19 @@ mod tests {
             }],
         };
 
-        open_session(&executor, "alpha", Path::new("/repo"), &template)
+        open_session(&backend, "alpha", Path::new("/repo"), &template)
             .expect("existing session should attach");
 
         assert_eq!(
-            executor.output_requests(),
+            backend.output_requests(),
             vec![list_sessions_request(), attach_request("alpha")]
         );
-        assert!(executor.status_requests().is_empty());
+        assert!(backend.status_requests().is_empty());
     }
 
     #[test]
     fn open_session_creates_windows_selects_first_and_attaches() {
-        let executor = RecordingExecutor::new(vec![
+        let backend = RecordingBackend::new(vec![
             command_output(0, b"", b""),
             command_output(0, b"@0\n", b""),
             command_output(0, b"@1\n", b""),
@@ -580,11 +583,11 @@ mod tests {
             ],
         };
 
-        open_session(&executor, "feature/foo", Path::new("/repo"), &template)
+        open_session(&backend, "feature/foo", Path::new("/repo"), &template)
             .expect("new session should be created");
 
         assert_eq!(
-            executor.output_requests(),
+            backend.output_requests(),
             vec![
                 list_sessions_request(),
                 list_windows_request("feature_foo"),
@@ -596,7 +599,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            executor.status_requests(),
+            backend.status_requests(),
             vec![
                 new_session_request("feature_foo", Path::new("/repo")),
                 kill_window_request("@0"),
@@ -605,13 +608,13 @@ mod tests {
         );
     }
 
-    struct RecordingExecutor {
+    struct RecordingBackend {
         output_responses: Mutex<VecDeque<CommandOutput>>,
         output_requests: Mutex<Vec<CommandRequest>>,
         status_requests: Mutex<Vec<CommandRequest>>,
     }
 
-    impl RecordingExecutor {
+    impl RecordingBackend {
         fn new(output_responses: Vec<CommandOutput>) -> Self {
             Self {
                 output_responses: Mutex::new(output_responses.into()),
@@ -635,8 +638,8 @@ mod tests {
         }
     }
 
-    impl CommandExecutor for RecordingExecutor {
-        fn output(&self, request: CommandRequest) -> Result<CommandOutput, CommandExecutorError> {
+    impl Backend for RecordingBackend {
+        fn output(&self, request: CommandRequest) -> Result<CommandOutput, BackendError> {
             self.output_requests
                 .lock()
                 .expect("requests lock should not be poisoned")
@@ -649,12 +652,40 @@ mod tests {
                 .expect("test output response should exist"))
         }
 
-        fn status(&self, request: CommandRequest) -> Result<ExitStatus, CommandExecutorError> {
+        fn status(&self, request: CommandRequest) -> Result<ExitStatus, BackendError> {
             self.status_requests
                 .lock()
                 .expect("requests lock should not be poisoned")
                 .push(request);
             Ok(status(0))
+        }
+
+        fn home_dir(&self) -> Result<std::path::PathBuf, BackendError> {
+            Ok(std::path::PathBuf::from("/home/test"))
+        }
+
+        fn current_dir(&self) -> Result<std::path::PathBuf, BackendError> {
+            Ok(std::path::PathBuf::from("/repo"))
+        }
+
+        fn path_exists(&self, _path: &Path) -> Result<bool, BackendError> {
+            Ok(true)
+        }
+
+        fn path_is_dir(&self, _path: &Path) -> Result<bool, BackendError> {
+            Ok(true)
+        }
+
+        fn create_dir_all(&self, _path: &Path) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        fn canonicalize(&self, path: &Path) -> Result<std::path::PathBuf, BackendError> {
+            Ok(path.to_path_buf())
+        }
+
+        fn validate_program(&self, _program: &std::ffi::OsStr) -> Result<(), BackendError> {
+            Ok(())
         }
     }
 
