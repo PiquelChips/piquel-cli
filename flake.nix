@@ -68,8 +68,8 @@
                                             machines = [
                                                 {
                                                     name = "pi";
-                                                    address = "pi.local";
-                                                    username = "ronan";
+                                                    address = "100.96.91.58";
+                                                    username = "piquel";
                                                 }
                                             ];
                                             projects = [
