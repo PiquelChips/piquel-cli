@@ -176,6 +176,32 @@ contain `/`, `\`, or `:`. Session names must not be empty or contain `:`. tmux
 session names derived from worktree branches are sanitized before tmux is
 invoked. Window names, when set, must not be blank.
 
+## Command Execution Model
+
+The CLI distinguishes between CLI actions and feedback actions.
+
+CLI actions are commands that `piquel` runs to inspect or change the user's
+workspace on their behalf. These commands must go through `CommandExecutor` so
+callers can swap execution behavior in tests or other embedding contexts.
+Examples include every `tmux` command and git commands used to list branches,
+list worktrees, or create a managed worktree.
+
+Feedback actions are interactions with the user at the current local prompt.
+They must stay local and must not go through `CommandExecutor`. Examples include
+printing project or session names with `println!`, printing top-level CLI errors
+with `eprintln!`, and running `fzf` so the user can make a selection.
+
+When adding code, use this rule:
+
+- If the command is part of accomplishing the requested operation, create a
+  `CommandRequest` in the owning module, usually `tmux` or `git`, and execute it
+  through `State::executor()`.
+- If the action exists to show information to the user or ask the user for a
+  choice, perform it directly in the local process or through the feedback
+  module, such as `fzf::select`.
+- Do not add stdout or stderr writing methods to `CommandExecutor`; user-visible
+  output is feedback, not command execution.
+
 ## Testing
 
 Run the whole test suite:
