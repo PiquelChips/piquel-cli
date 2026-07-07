@@ -6,6 +6,8 @@ use std::{
 };
 use thiserror::Error;
 
+const FZF_CANCELLATION_CODE: i32 = 130;
+
 /// Errors produced while running `fzf`.
 #[derive(Debug, Error)]
 pub enum FzfError {
@@ -69,7 +71,7 @@ where
         } else {
             Ok(Some(selection))
         }
-    } else if selection.is_empty() {
+    } else if output.status.code() == Some(FZF_CANCELLATION_CODE) {
         Ok(None)
     } else {
         Err(FzfError::Command(format!(
@@ -220,6 +222,28 @@ exit 0
             "failed-fzf",
             r"cat >/dev/null
 printf 'partial\n'
+exit 2
+",
+        );
+
+        let err = select_with_program(
+            fake_fzf
+                .to_str()
+                .expect("fake fzf path should be valid UTF-8"),
+            vec!["one".to_owned()],
+            "piquel> ",
+        )
+        .expect_err("fzf failure should be returned");
+
+        assert!(matches!(err, FzfError::Command(_)));
+        assert!(err.to_string().contains("fzf exited with status"));
+    }
+
+    #[test]
+    fn failed_selection_without_stdout_returns_command_error() {
+        let fake_fzf = test_script(
+            "failed-empty-fzf",
+            r"cat >/dev/null
 exit 2
 ",
         );

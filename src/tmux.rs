@@ -60,9 +60,8 @@ pub fn list_sessions(backend: &dyn Backend) -> Result<Vec<String>, TmuxError> {
 ///
 /// Returns an error if tmux failed for a reason other than a missing server.
 pub fn parse_list_sessions_output(output: &CommandOutput) -> Result<Vec<String>, TmuxError> {
-    let combined = combined_output(output);
-
     if !output.status.success() {
+        let combined = combined_output(output);
         if combined.starts_with("no server running on")
             || combined.starts_with("error connecting to")
         {
@@ -74,7 +73,8 @@ pub fn parse_list_sessions_output(output: &CommandOutput) -> Result<Vec<String>,
         )));
     }
 
-    let trimmed = combined.trim_matches('\n');
+    let stdout = stdout_text(output);
+    let trimmed = stdout.trim_matches('\n');
     if trimmed.is_empty() {
         return Ok(vec![]);
     }
@@ -227,9 +227,9 @@ pub fn open_session(
             .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
     }
 
-    attach(backend, &tmux_name).map_err(|_| {
+    attach(backend, &tmux_name).map_err(|e| {
         TmuxError::Command(format!(
-            "Failed to attach to session with error: {tmux_name}"
+            "Failed to attach to session {tmux_name} with error: {e}"
         ))
     })?;
 
@@ -242,11 +242,10 @@ pub fn open_session(
 ///
 /// Returns an error if the command status was unsuccessful.
 pub fn successful_output(output: &CommandOutput) -> Result<String, TmuxError> {
-    let combined = combined_output(output);
     if output.status.success() {
-        Ok(combined)
+        Ok(stdout_text(output))
     } else {
-        Err(TmuxError::Command(combined))
+        Err(TmuxError::Command(combined_output(output)))
     }
 }
 
@@ -385,6 +384,10 @@ fn combined_output(output: &CommandOutput) -> String {
     combined
 }
 
+fn stdout_text(output: &CommandOutput) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,11 +517,20 @@ mod tests {
     }
 
     #[test]
-    fn successful_output_combines_streams_and_rejects_failures() {
+    fn list_sessions_ignores_stderr_on_success() {
+        let output = command_output(0, b"alpha\nbeta\n", b"warning\n");
+
+        let sessions = parse_list_sessions_output(&output).expect("sessions should parse");
+
+        assert_eq!(sessions, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn successful_output_uses_stdout_and_rejects_failures_with_combined_streams() {
         let success = command_output(0, b"stdout", b"stderr");
         assert_eq!(
             successful_output(&success).expect("success should parse"),
-            "stdoutstderr"
+            "stdout"
         );
 
         let failure = command_output(1, b"stdout", b"stderr");

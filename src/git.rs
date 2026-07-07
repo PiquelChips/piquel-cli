@@ -88,12 +88,11 @@ pub fn list_local_branches_request(
 ///
 /// Returns an error if git exited unsuccessfully.
 pub fn parse_local_branches_output(output: &CommandOutput) -> Result<Vec<String>, GitError> {
-    let combined = combined_output(output);
     if !output.status.success() {
-        return Err(GitError::Command(combined));
+        return Err(GitError::Command(combined_output(output)));
     }
 
-    Ok(parse_local_branches(&combined))
+    Ok(parse_local_branches(&stdout_text(output)))
 }
 
 /// Returns the command request for creating a git worktree.
@@ -157,12 +156,11 @@ pub fn list_worktrees_request(
 ///
 /// Returns an error if git exited unsuccessfully or output cannot be parsed.
 pub fn parse_worktrees_output(output: &CommandOutput) -> Result<Vec<Worktree>, GitError> {
-    let combined = combined_output(output);
     if !output.status.success() {
-        return Err(GitError::Command(combined));
+        return Err(GitError::Command(combined_output(output)));
     }
 
-    parse_worktrees(&combined)
+    parse_worktrees(&stdout_text(output))
 }
 
 /// Finds the worktree for `branch` in an already-discovered worktree list.
@@ -242,6 +240,10 @@ fn combined_output(output: &CommandOutput) -> String {
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     combined
+}
+
+fn stdout_text(output: &CommandOutput) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn push_worktree(
@@ -547,6 +549,38 @@ main
             assert!(error.to_string().contains("stdout failure"));
             assert!(error.to_string().contains("stderr failure"));
         }
+    }
+
+    #[test]
+    fn successful_branch_parsing_ignores_stderr() {
+        let output = CommandOutput {
+            status: status(0),
+            stdout: b"main\nfeature/foo\n".to_vec(),
+            stderr: b"warning: ignored\n".to_vec(),
+        };
+
+        let branches = parse_local_branches_output(&output).expect("branches should parse");
+
+        assert_eq!(branches, vec!["feature/foo", "main"]);
+    }
+
+    #[test]
+    fn successful_worktree_parsing_ignores_stderr() {
+        let output = CommandOutput {
+            status: status(0),
+            stdout: b"worktree /repo\nHEAD 1111111111111111111111111111111111111111\nbranch refs/heads/main\n".to_vec(),
+            stderr: b"warning: ignored\n".to_vec(),
+        };
+
+        let worktrees = parse_worktrees_output(&output).expect("worktrees should parse");
+
+        assert_eq!(
+            worktrees,
+            vec![Worktree {
+                path: PathBuf::from("/repo"),
+                branch: Some("main".to_owned())
+            }]
+        );
     }
 
     #[test]
