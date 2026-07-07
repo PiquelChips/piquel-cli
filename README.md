@@ -30,8 +30,9 @@ nix build
 
 ## Usage
 
-By default, the CLI reads `~/.config/piquel/config.json`. Use `--config` to
-point at a different file.
+By default, the CLI reads `~/.config/piquel/config.json`. Set `PIQUEL_CONFIG`
+or use `--config` to point at a different file. The `--config` flag takes
+precedence over `PIQUEL_CONFIG`.
 
 ```sh
 piquel --config examples/test-config.json project list
