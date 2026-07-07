@@ -164,6 +164,60 @@ exit 64
     )
 }
 
+fn fake_ssh_script(log: &Path, list_sessions: &str) -> String {
+    format!(
+        r#"#!{}
+log={}
+target=$2
+cmd=$3
+printf '%s	%s\n' "$target" "$cmd" >> "$log"
+
+case "$cmd" in
+    *"printf "*"HOME"*)
+        printf '/home/pi\n'
+        exit 0
+        ;;
+    *"pwd -P"*)
+        printf '/home/pi\n'
+        exit 0
+        ;;
+    *"command -v "*)
+        exit 0
+        ;;
+    *"test -e "*|*"test -d "*|*"mkdir -p "*)
+        exit 0
+        ;;
+esac
+
+case "$cmd" in
+    *"'tmux' 'list-sessions'"*)
+        printf '{}'
+        exit 0
+        ;;
+    *"'tmux' 'new-session'"*)
+        exit 0
+        ;;
+    *"'tmux' 'list-windows'"*)
+        printf 'bootstrap-window\n'
+        exit 0
+        ;;
+    *"'tmux' 'new-window'"*)
+        printf 'window-id\n'
+        exit 0
+        ;;
+    *"'tmux' 'send-keys'"*|*"'tmux' 'kill-window'"*|*"'tmux' 'select-window'"*|*"'tmux' 'attach'"*)
+        exit 0
+        ;;
+esac
+
+exit 64
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log)),
+        list_sessions
+    )
+}
+
 fn fake_fzf_script(selection: &str, input_log: &Path) -> String {
     format!(
         r"#!{}
@@ -683,6 +737,118 @@ exit 64
         .expect("piquel should run");
 
     assert_success(&output, "alpha\nzeta\n", "");
+}
+
+#[test]
+fn list_with_machine_runs_tmux_over_ssh() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        r#"{
+            "default_session": "default",
+            "sessions": {
+                "default": { "windows": [{ "commands": [] }] }
+            },
+            "machines": [
+                {
+                    "name": "pi",
+                    "address": "pi.example.test",
+                    "username": "ronan"
+                }
+            ]
+        }"#,
+    );
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[("ssh", fake_ssh_script(&ssh_log, "zeta\nalpha\nzeta\n"))],
+    );
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "--machine", "pi", "list"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "alpha\nzeta\n", "");
+
+    let log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
+    assert!(log.contains("ronan@pi.example.test"));
+    assert!(log.contains("'tmux' 'list-sessions' '-F' '#{session_name}'"));
+}
+
+#[test]
+fn unknown_machine_exits_before_running_ssh() {
+    let temp = TestDir::new();
+    let config = config_with_projects(&temp);
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(&temp, &[("ssh", fake_ssh_script(&ssh_log, ""))]);
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "--machine", "pi", "list"])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(&output, &["Machine \"pi\" is not configured"]);
+    assert!(!ssh_log.exists(), "ssh should not be invoked");
+}
+
+#[test]
+fn project_load_with_machine_opens_remote_tmux_session() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        r#"{
+            "default_session": "default",
+            "sessions": {
+                "default": {
+                    "windows": [
+                        { "name": "editor", "commands": ["vim ."] }
+                    ]
+                }
+            },
+            "projects": [
+                {
+                    "repository": "https://github.com/owner/alpha.git",
+                    "path": "/srv/projects/alpha"
+                }
+            ],
+            "machines": [
+                {
+                    "name": "pi",
+                    "address": "pi.local",
+                    "username": "ronan"
+                }
+            ]
+        }"#,
+    );
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(&temp, &[("ssh", fake_ssh_script(&ssh_log, ""))]);
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "-m",
+            "pi",
+            "project",
+            "load",
+            "alpha",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
+    assert!(log.contains("ronan@pi.local"));
+    assert!(log.contains("'tmux' 'new-session' '-d' '-c' '/srv/projects/alpha' '-s' 'alpha'"));
+    assert!(log.contains("'tmux' 'new-window' '-P' '-F' '#{window_id}' '-n' 'editor' '-t' 'alpha' '-c' '/srv/projects/alpha'"));
+    assert!(log.contains("'tmux' 'send-keys' '-t' 'window-id' 'vim .' 'Enter'"));
+    assert!(log.contains("'tmux' 'attach' '-t' 'alpha'"));
 }
 
 #[test]

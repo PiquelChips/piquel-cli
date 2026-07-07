@@ -11,6 +11,7 @@ session or project interactively.
 - `tmux` for session commands
 - `fzf` for `piquel pick`
 - `git` when using project worktree selection
+- `ssh` when using `-m/--machine` for remote machines
 
 ## Install
 
@@ -41,17 +42,28 @@ piquel --config examples/test-config.json project list
 Commands:
 
 ```text
-piquel list
-piquel pick [project] [--session <template>]
+piquel [-m <machine>] list
+piquel [-m <machine>] pick [project] [--session <template>]
 piquel project list
-piquel project load <project> [--session <template>] [--worktree <branch>]
-piquel session [path] [--session <template>] [--name <tmux-name>]
+piquel [-m <machine>] project load <project> [--session <template>] [--worktree <branch>]
+piquel [-m <machine>] session [path] [--session <template>] [--name <tmux-name>]
 ```
 
 `piquel list` prints running tmux sessions. `piquel pick` combines running
 tmux sessions and configured projects, lets `fzf` select one, then attaches to
 the session or opens the project branch workflow. `piquel pick <project>` skips
 the first picker and opens that project's branch workflow directly.
+
+Use `-m/--machine` to run workspace commands on a configured remote machine:
+
+```sh
+piquel -m pi pick
+piquel -m pi project load piquel-cli
+```
+
+The config file itself is always read locally. When a machine is selected,
+tmux, git, path checks, `~` expansion, directory creation, and program
+validation run through `ssh -t <username>@<address> ...`.
 
 The branch picker lists local git branches only. It does not fetch and does not
 create remote-tracking branches. If the selected branch already has a worktree,
@@ -129,6 +141,13 @@ Fuller project config:
       ]
     }
   },
+  "machines": [
+    {
+      "name": "pi",
+      "address": "pi.local",
+      "username": "ronan"
+    }
+  ],
   "projects": [
     {
       "repository": "git@github.com:PiquelChips/piquel-cli.git",
@@ -163,6 +182,8 @@ Fields:
   one window.
 - `projects`: configured repositories. The project name is derived from the
   repository basename unless `name` is set.
+- `machines`: configured SSH machines. `name` is passed to `-m/--machine`,
+  while `address` and `username` form the SSH target.
 - `projects[].path`: explicit project path. Defaults to
   `<projects_dir>/<project-name>`.
 - `projects[].default_session`: either the name of a global session template or
