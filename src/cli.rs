@@ -1,9 +1,13 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::{Config, config, tmux};
+use crate::{
+    Config, SessionConfig, WindowConfig, config,
+    executor::{CommandExecutor, LocalCommandExecutor},
+    tmux,
+};
 
 mod projects;
 mod sessions;
@@ -77,13 +81,21 @@ pub enum ProjectCommands {
 /// Runtime state shared by CLI command handlers.
 pub struct State {
     config: Config,
+    executor: Box<dyn CommandExecutor>,
 }
 
 impl State {
     /// Creates CLI state from loaded configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            executor: Box::<LocalCommandExecutor>::default(),
+        }
+    }
+
+    pub(crate) fn executor(&self) -> &dyn CommandExecutor {
+        self.executor.as_ref()
     }
 
     /// Lists running tmux sessions.
