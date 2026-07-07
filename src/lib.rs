@@ -2,7 +2,7 @@
 
 /// Command-line parsing and top-level dispatch.
 pub mod cli;
-/// JSON config loading and global config access.
+/// JSON config loading.
 pub mod config;
 /// Interactive fuzzy selection helpers.
 pub mod fzf;
