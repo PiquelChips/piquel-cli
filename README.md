@@ -107,9 +107,11 @@ Fuller project config:
     "default": {
       "windows": [
         {
+          "name": "editor",
           "commands": ["vim ."]
         },
         {
+          "name": "git",
           "commands": ["git status"]
         }
       ]
@@ -117,9 +119,11 @@ Fuller project config:
     "rust": {
       "windows": [
         {
+          "name": "editor",
           "commands": ["vim ."]
         },
         {
+          "name": "test",
           "commands": ["cargo test"]
         }
       ]
@@ -137,6 +141,7 @@ Fuller project config:
       "default_session": {
         "windows": [
           {
+            "name": "editor",
             "commands": ["vim ."]
           }
         ]
@@ -162,13 +167,14 @@ Fields:
   `<projects_dir>/<project-name>`.
 - `projects[].default_session`: either the name of a global session template or
   an inline session template.
+- `sessions.*.windows[].name`: optional tmux window name.
 - `sessions.*.windows[].commands`: commands sent to the created tmux window,
   each followed by `Enter`.
 
 Project names must be safe path segments: they must not be empty, `.`, `..`, or
 contain `/`, `\`, or `:`. Session names must not be empty or contain `:`. tmux
 session names derived from worktree branches are sanitized before tmux is
-invoked.
+invoked. Window names, when set, must not be blank.
 
 ## Testing
 

@@ -167,17 +167,17 @@ pub fn new_window(
     start_dir: &Path,
     window: &WindowConfig,
 ) -> Result<String, TmuxError> {
-    let window_id = exec_tmux_return(&[
-        "new-window",
-        "-P",
-        "-F",
-        "#{window_id}",
-        "-t",
-        session_name,
-        "-c",
-        &start_dir.to_string_lossy(),
-    ])
-    .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
+    let start_dir = start_dir.to_string_lossy();
+    let mut args = vec!["new-window", "-P", "-F", "#{window_id}"];
+
+    if let Some(name) = &window.name {
+        args.extend(["-n", name]);
+    }
+
+    args.extend(["-t", session_name, "-c", &start_dir]);
+
+    let window_id = exec_tmux_return(&args)
+        .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
 
     let window_id = window_id.trim_matches('\n').to_owned();
 
