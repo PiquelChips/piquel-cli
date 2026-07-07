@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{cli::projects, config, fzf, tmux};
+use crate::{cli::State, fzf, tmux};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PickTarget {
@@ -13,63 +13,89 @@ enum PickTarget {
     Project(String),
 }
 
-pub fn pick(project: Option<&str>, session_override: Option<&str>) -> Result<()> {
-    if let Some(project) = project {
-        projects::open_project_interactive(project, session_override)?;
-        return Ok(());
-    }
-
-    match pick_target()? {
-        Some(PickTarget::TmuxSession(name)) => {
-            tmux::err_in_tmux()?;
-            tmux::attach(&name)?;
+impl State {
+    /// Picks a tmux session or configured project and opens it.
+    pub fn pick(&self, project: Option<&str>, session_override: Option<&str>) -> Result<()> {
+        if let Some(project) = project {
+            self.open_project_interactive(project, session_override)?;
+            return Ok(());
         }
-        Some(PickTarget::Project(name)) => {
-            projects::open_project_interactive(&name, session_override)?;
+
+        match self.pick_target()? {
+            Some(PickTarget::TmuxSession(name)) => {
+                tmux::err_in_tmux()?;
+                tmux::attach(&name)?;
+            }
+            Some(PickTarget::Project(name)) => {
+                self.open_project_interactive(&name, session_override)?;
+            }
+            None => {}
         }
-        None => {}
+
+        Ok(())
     }
 
-    Ok(())
-}
+    /// Opens an ad hoc directory with a configured session template.
+    pub fn session(
+        &self,
+        path: Option<PathBuf>,
+        session_override: Option<&str>,
+        name_override: Option<&str>,
+    ) -> Result<()> {
+        tmux::err_in_tmux()?;
 
-pub fn session(
-    path: Option<PathBuf>,
-    session_override: Option<&str>,
-    name_override: Option<&str>,
-) -> Result<()> {
-    tmux::err_in_tmux()?;
+        let template_name = session_override.unwrap_or(&self.config.default_session);
+        let template = self
+            .config
+            .session_template(template_name)
+            .ok_or_else(|| anyhow!("Session template \"{template_name}\" is not configured"))?;
 
-    let config = config::config();
-    let template_name = session_override.unwrap_or(&config.default_session);
-    let template = config
-        .session_template(template_name)
-        .ok_or_else(|| anyhow!("Session template \"{template_name}\" is not configured"))?;
+        let root = match path {
+            Some(path) => expand_home(&path),
+            None => std::env::current_dir().context("Failed to determine current directory")?,
+        };
 
-    let root = match path {
-        Some(path) => expand_home(&path),
-        None => std::env::current_dir().context("Failed to determine current directory")?,
-    };
+        if !root.exists() {
+            bail!("Session path {} does not exist", root.display());
+        }
 
-    if !root.exists() {
-        bail!("Session path {} does not exist", root.display());
+        if !root.is_dir() {
+            bail!("Session path {} is not a directory", root.display());
+        }
+
+        let tmux_name = match name_override {
+            Some(name) => name.to_owned(),
+            None => root
+                .file_name()
+                .ok_or_else(|| {
+                    anyhow!("Could not derive session name from path {}", root.display())
+                })?
+                .to_string_lossy()
+                .into_owned(),
+        };
+
+        tmux::open_session(&tmux_name, &root, template)?;
+        Ok(())
     }
 
-    if !root.is_dir() {
-        bail!("Session path {} is not a directory", root.display());
+    fn pick_target(&self) -> Result<Option<PickTarget>> {
+        let project_names = self
+            .config
+            .projects
+            .iter()
+            .filter_map(|project| project.resolved_name().ok());
+        let tmux_sessions = tmux::list_tmux_sessions()?;
+        let (items, mut targets) = build_pick_targets(tmux_sessions, project_names);
+
+        let Some(selection) = fzf::select(items, "piquel> ")? else {
+            return Ok(None);
+        };
+
+        targets
+            .remove(&selection)
+            .map(Some)
+            .ok_or_else(|| anyhow!("Selected unknown picker item \"{selection}\""))
     }
-
-    let tmux_name = match name_override {
-        Some(name) => name.to_owned(),
-        None => root
-            .file_name()
-            .ok_or_else(|| anyhow!("Could not derive session name from path {}", root.display()))?
-            .to_string_lossy()
-            .into_owned(),
-    };
-
-    tmux::open_session(&tmux_name, &root, template)?;
-    Ok(())
 }
 
 fn expand_home(path: &Path) -> PathBuf {
@@ -79,25 +105,6 @@ fn expand_home(path: &Path) -> PathBuf {
         return home.join(stripped);
     }
     path.to_path_buf()
-}
-
-fn pick_target() -> Result<Option<PickTarget>> {
-    let config = config::config();
-    let project_names = config
-        .projects
-        .iter()
-        .filter_map(|project| project.resolved_name().ok());
-    let tmux_sessions = tmux::list_tmux_sessions()?;
-    let (items, mut targets) = build_pick_targets(tmux_sessions, project_names);
-
-    let Some(selection) = fzf::select(items, "piquel> ")? else {
-        return Ok(None);
-    };
-
-    targets
-        .remove(&selection)
-        .map(Some)
-        .ok_or_else(|| anyhow!("Selected unknown picker item \"{selection}\""))
 }
 
 fn build_pick_targets<T, P>(

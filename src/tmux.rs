@@ -1,4 +1,4 @@
-use crate::{SessionConfig, WindowConfig, config};
+use crate::{SessionConfig, WindowConfig};
 use std::io;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -21,28 +21,14 @@ pub enum TmuxError {
     InvalidSessionName(String),
 }
 
-/// Lists sessions from tmux, the config, or both, sorted and deduplicated.
+/// Lists running tmux sessions, sorted and deduplicated.
+/// Output is in stdout.
 ///
 /// # Errors
 ///
 /// Returns an error if tmux session listing fails.
-pub fn list_sessions(list_config: bool, list_tmux: bool) -> Result<(), TmuxError> {
-    let config = config::config();
-
-    let mut sessions: Vec<String> = Vec::new();
-
-    if list_tmux {
-        let tmux_sessions = list_tmux_sessions()?;
-        sessions.extend(tmux_sessions);
-    }
-
-    if list_config {
-        for project in &config.projects {
-            if let Ok(project_name) = project.resolved_name() {
-                sessions.push(project_name);
-            }
-        }
-    }
+pub fn list_sessions() -> Result<(), TmuxError> {
+    let mut sessions = list_tmux_sessions()?;
 
     sessions.sort();
     sessions.dedup();

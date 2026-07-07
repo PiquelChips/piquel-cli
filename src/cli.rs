@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{config, tmux};
+use crate::{Config, config, tmux};
 
 mod projects;
 mod sessions;
@@ -74,6 +74,25 @@ pub enum ProjectCommands {
     },
 }
 
+/// Runtime state shared by CLI command handlers.
+pub struct State {
+    config: Config,
+}
+
+impl State {
+    /// Creates CLI state from loaded configuration.
+    #[must_use]
+    pub fn new(config: Config) -> Self {
+        Self { config }
+    }
+
+    /// Lists running tmux sessions.
+    pub fn list(&self) -> Result<()> {
+        tmux::list_sessions()?;
+        Ok(())
+    }
+}
+
 /// Parses CLI arguments, loads configuration, and dispatches the selected command.
 ///
 /// # Errors
@@ -95,31 +114,23 @@ pub fn run() -> Result<()> {
             Ok,
         )?;
 
-    config::load_config(&config_path)?;
+    let state = State::new(config::load_config(&config_path)?);
 
     match &cli.command {
-        Commands::List => {
-            tmux::list_sessions(false, true)?;
-            Ok(())
-        }
-        Commands::Pick { project, session } => {
-            sessions::pick(project.as_deref(), session.as_deref())
-        }
+        Commands::List => state.list(),
+        Commands::Pick { project, session } => state.pick(project.as_deref(), session.as_deref()),
         Commands::Project { command } => match command {
-            ProjectCommands::List => {
-                projects::list_projects();
-                Ok(())
-            }
+            ProjectCommands::List => state.list_projects(),
             ProjectCommands::Load {
                 project,
                 session,
                 worktree,
-            } => projects::load_project(project, session.as_deref(), worktree.as_deref()),
+            } => state.load_project(project, session.as_deref(), worktree.as_deref()),
         },
         Commands::Session {
             path,
             session,
             name,
-        } => sessions::session(path.clone(), session.as_deref(), name.as_deref()),
+        } => state.session(path.clone(), session.as_deref(), name.as_deref()),
     }
 }
