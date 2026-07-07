@@ -237,6 +237,7 @@ fn write_stdin(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
     #[test]
     fn command_requests_close_stdin_by_default() {
@@ -244,5 +245,120 @@ mod tests {
             CommandRequest::new("program").stdin_config(),
             &CommandInput::Closed
         );
+    }
+
+    #[test]
+    fn command_request_builder_preserves_program_args_and_stdin() {
+        let request = CommandRequest::new("program")
+            .arg("one")
+            .args(["two", "three"])
+            .stdin(CommandInput::Bytes(b"input".to_vec()));
+
+        assert_eq!(request.program(), OsStr::new("program"));
+        assert_eq!(
+            request.args_os().collect::<Vec<_>>(),
+            vec![OsStr::new("one"), OsStr::new("two"), OsStr::new("three")]
+        );
+        assert_eq!(
+            request.stdin_config(),
+            &CommandInput::Bytes(b"input".to_vec())
+        );
+    }
+
+    #[test]
+    fn command_requests_preserve_push_and_extend_order() {
+        let mut requests = CommandRequests::one(CommandRequest::new("first"));
+        requests.push(CommandRequest::new("second"));
+        requests.extend([CommandRequest::new("third"), CommandRequest::new("fourth")]);
+
+        let programs = requests
+            .into_iter()
+            .map(|request| request.program)
+            .collect::<Vec<_>>();
+
+        assert_eq!(programs, vec!["first", "second", "third", "fourth"]);
+    }
+
+    #[test]
+    fn default_statuses_runs_requests_in_order() {
+        let executor = RecordingExecutor::default();
+        let statuses = executor
+            .statuses({
+                let mut requests = CommandRequests::new();
+                requests.push(CommandRequest::new("first"));
+                requests.push(CommandRequest::new("second"));
+                requests
+            })
+            .expect("statuses should succeed");
+
+        assert_eq!(statuses.len(), 2);
+        assert!(statuses.iter().all(ExitStatus::success));
+        assert_eq!(
+            executor.programs(),
+            vec![OsString::from("first"), OsString::from("second")]
+        );
+    }
+
+    #[test]
+    fn local_executor_pipes_bytes_to_output_command() {
+        let output = LocalCommandExecutor
+            .output(
+                CommandRequest::new(shell())
+                    .args(["-c", "cat; printf err >&2"])
+                    .stdin(CommandInput::Bytes(b"hello".to_vec())),
+            )
+            .expect("shell command should run");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"hello");
+        assert_eq!(output.stderr, b"err");
+    }
+
+    #[test]
+    fn local_executor_status_reports_exit_code() {
+        let status = LocalCommandExecutor
+            .status(CommandRequest::new(shell()).args(["-c", "exit 7"]))
+            .expect("shell command should run");
+
+        assert_eq!(status.code(), Some(7));
+    }
+
+    #[derive(Default)]
+    struct RecordingExecutor {
+        programs: Mutex<Vec<OsString>>,
+    }
+
+    impl RecordingExecutor {
+        fn programs(&self) -> Vec<OsString> {
+            self.programs
+                .lock()
+                .expect("program lock should not be poisoned")
+                .clone()
+        }
+    }
+
+    impl CommandExecutor for RecordingExecutor {
+        fn output(&self, _request: CommandRequest) -> Result<CommandOutput, CommandExecutorError> {
+            panic!("output should not be called by statuses")
+        }
+
+        fn status(&self, request: CommandRequest) -> Result<ExitStatus, CommandExecutorError> {
+            self.programs
+                .lock()
+                .expect("program lock should not be poisoned")
+                .push(request.program);
+            Ok(status(0))
+        }
+    }
+
+    fn shell() -> &'static str {
+        "/bin/sh"
+    }
+
+    #[cfg(unix)]
+    fn status(code: i32) -> ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+
+        ExitStatus::from_raw(code << 8)
     }
 }

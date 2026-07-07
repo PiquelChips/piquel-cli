@@ -385,6 +385,52 @@ branch refs/heads/feature/foo
     }
 
     #[test]
+    fn parses_final_worktree_without_trailing_blank_line() {
+        let output = "\
+worktree /home/me/Projects/repo
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/main";
+
+        let worktrees = parse_worktrees(output).expect("worktree output should parse");
+
+        assert_eq!(
+            worktrees,
+            vec![Worktree {
+                path: PathBuf::from("/home/me/Projects/repo"),
+                branch: Some("main".to_owned())
+            }]
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_worktree_metadata() {
+        let output = "\
+worktree /home/me/Projects/repo-feature
+HEAD 2222222222222222222222222222222222222222
+bare
+prunable gitdir file points to non-existent location
+branch refs/heads/feature/foo
+
+";
+
+        let worktrees = parse_worktrees(output).expect("worktree output should parse");
+
+        assert_eq!(
+            worktrees[0].path,
+            PathBuf::from("/home/me/Projects/repo-feature")
+        );
+        assert_eq!(worktrees[0].branch.as_deref(), Some("feature/foo"));
+    }
+
+    #[test]
+    fn branch_before_worktree_path_returns_parse_error() {
+        let err = parse_worktrees("branch refs/heads/main\n")
+            .expect_err("branch without worktree path should fail");
+
+        assert!(matches!(err, GitError::Parse(_)));
+    }
+
+    #[test]
     fn detached_worktrees_have_no_branch() {
         let output = "\
 worktree /home/me/Projects/repo-detached
@@ -461,6 +507,39 @@ main
     }
 
     #[test]
+    fn parse_output_helpers_return_command_errors_on_failure() {
+        let output = CommandOutput {
+            status: status(1),
+            stdout: b"stdout failure\n".to_vec(),
+            stderr: b"stderr failure\n".to_vec(),
+        };
+
+        for error in [
+            parse_local_branches_output(&output).expect_err("branch parse should fail"),
+            parse_worktrees_output(&output).expect_err("worktree parse should fail"),
+            parse_create_worktree_output(&output).expect_err("create parse should fail"),
+        ] {
+            assert!(matches!(error, GitError::Command(_)));
+            assert!(error.to_string().contains("stdout failure"));
+            assert!(error.to_string().contains("stderr failure"));
+        }
+    }
+
+    #[test]
+    fn request_builders_reject_missing_project_paths() {
+        let missing = Path::new("/definitely/missing/piquel/project");
+
+        assert!(matches!(
+            list_local_branches_request(missing),
+            Err(GitError::MissingProjectPath(_))
+        ));
+        assert!(matches!(
+            list_worktrees_request(missing),
+            Err(GitError::MissingProjectPath(_))
+        ));
+    }
+
+    #[test]
     fn worktree_for_branch_matches_exact_branch() {
         let worktrees = vec![
             worktree("/repo", Some("main")),
@@ -480,6 +559,14 @@ main
             .expect("managed path should be generated");
 
         assert_eq!(path, PathBuf::from("/worktrees/alpha/feature_foo"));
+    }
+
+    #[test]
+    fn managed_worktree_path_collapses_unsafe_branch_characters() {
+        let path = managed_worktree_path(Path::new("/worktrees"), "alpha", " feature///bug:42 ")
+            .expect("managed path should be generated");
+
+        assert_eq!(path, PathBuf::from("/worktrees/alpha/feature_bug_42"));
     }
 
     #[test]
@@ -506,6 +593,34 @@ main
             .expect_err("existing unregistered path should be rejected");
 
         assert!(matches!(err, GitError::ManagedWorktreePathConflict { .. }));
+
+        std::fs::remove_dir_all(root).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn allows_existing_registered_managed_worktree_path() {
+        let root = std::env::temp_dir().join(format!(
+            "piquel-git-test-registered-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos()
+        ));
+        let existing = root.join("alpha/feature_foo");
+        std::fs::create_dir_all(&existing).expect("test directory should be created");
+
+        let path = managed_worktree_path_for_branch(
+            &root,
+            "alpha",
+            "feature/foo",
+            &[Worktree {
+                path: existing.clone(),
+                branch: Some("feature/foo".to_owned()),
+            }],
+        )
+        .expect("registered path should be accepted");
+
+        assert_eq!(path, existing);
 
         std::fs::remove_dir_all(root).expect("test directory should be removed");
     }
@@ -573,5 +688,12 @@ main
             path: PathBuf::from(path),
             branch: branch.map(str::to_owned),
         }
+    }
+
+    #[cfg(unix)]
+    fn status(code: i32) -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+
+        std::process::ExitStatus::from_raw(code << 8)
     }
 }

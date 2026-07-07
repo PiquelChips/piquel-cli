@@ -122,13 +122,142 @@ exit 130
         assert_eq!(selection, None);
     }
 
+    #[test]
+    fn successful_selection_returns_trimmed_item_and_writes_choices() {
+        let dir = test_dir("successful-fzf");
+        let input_log = dir.join("input.log");
+        let args_log = dir.join("args.log");
+        let fake_fzf = test_script_in(
+            &dir,
+            "fzf",
+            &format!(
+                r#"#!/bin/sh
+for arg in "$@"; do
+    printf '%s\n' "$arg"
+done > {}
+cat > {}
+printf 'two\n'
+"#,
+                shell_quote(&args_log),
+                shell_quote(&input_log)
+            ),
+        );
+
+        let selection = select_with_program(
+            fake_fzf
+                .to_str()
+                .expect("fake fzf path should be valid UTF-8"),
+            vec!["one".to_owned(), "two".to_owned()],
+            "piquel> ",
+        )
+        .expect("fake fzf should run");
+
+        assert_eq!(selection, Some("two".to_owned()));
+        assert_eq!(
+            fs::read_to_string(input_log).expect("input log should be readable"),
+            "one\ntwo\n"
+        );
+        assert_eq!(
+            fs::read_to_string(args_log).expect("args log should be readable"),
+            "--prompt\npiquel> \n"
+        );
+    }
+
+    #[test]
+    fn successful_empty_selection_returns_none() {
+        let fake_fzf = test_script(
+            "empty-fzf",
+            r"#!/bin/sh
+cat >/dev/null
+exit 0
+",
+        );
+
+        let selection = select_with_program(
+            fake_fzf
+                .to_str()
+                .expect("fake fzf path should be valid UTF-8"),
+            vec!["one".to_owned()],
+            "piquel> ",
+        )
+        .expect("fake fzf should run");
+
+        assert_eq!(selection, None);
+    }
+
+    #[test]
+    fn failed_selection_with_stdout_returns_command_error() {
+        let fake_fzf = test_script(
+            "failed-fzf",
+            r"#!/bin/sh
+cat >/dev/null
+printf 'partial\n'
+exit 2
+",
+        );
+
+        let err = select_with_program(
+            fake_fzf
+                .to_str()
+                .expect("fake fzf path should be valid UTF-8"),
+            vec!["one".to_owned()],
+            "piquel> ",
+        )
+        .expect_err("fzf failure should be returned");
+
+        assert!(matches!(err, FzfError::Command(_)));
+        assert!(err.to_string().contains("fzf exited with status"));
+    }
+
+    #[test]
+    fn missing_binary_returns_missing_binary_error() {
+        let err = select_with_program(
+            "/definitely/missing/piquel/fzf",
+            vec!["one".to_owned()],
+            "piquel> ",
+        )
+        .expect_err("missing binary should be returned");
+
+        assert!(matches!(err, FzfError::MissingBinary));
+    }
+
+    #[test]
+    fn broken_pipe_while_writing_items_is_treated_as_cancelled() {
+        let fake_fzf = test_script(
+            "early-exit-fzf",
+            r"#!/bin/sh
+exit 130
+",
+        );
+
+        let selection = select_with_program(
+            fake_fzf
+                .to_str()
+                .expect("fake fzf path should be valid UTF-8"),
+            (0..10_000).map(|index| format!("item-{index}")),
+            "piquel> ",
+        )
+        .expect("broken pipe from early exit should not fail");
+
+        assert_eq!(selection, None);
+    }
+
     fn test_script(name: &str, content: &str) -> PathBuf {
+        let dir = test_dir(name);
+        test_script_in(&dir, name, content)
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time should be after UNIX_EPOCH")
             .as_nanos();
         let dir = std::env::temp_dir().join(format!("piquelcli-{name}-{unique}"));
         fs::create_dir_all(&dir).expect("test script directory should be created");
+        dir
+    }
+
+    fn test_script_in(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
         let script = dir.join(name);
         fs::write(&script, content).expect("test script should be written");
 
@@ -143,5 +272,14 @@ exit 130
         }
 
         script
+    }
+
+    fn shell_quote(path: &std::path::Path) -> String {
+        format!(
+            "'{}'",
+            path.to_str()
+                .expect("test path should be UTF-8")
+                .replace('\'', "'\\''")
+        )
     }
 }
