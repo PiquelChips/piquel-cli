@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::{
-    Config, config,
-    executor::{CommandExecutor, LocalCommandExecutor},
-    tmux,
+    Config,
+    backend::{Backend, LocalBackend},
+    config, tmux,
 };
 
 mod projects;
@@ -81,21 +81,22 @@ pub enum ProjectCommands {
 /// Runtime state shared by CLI command handlers.
 pub struct State {
     config: Config,
-    executor: Box<dyn CommandExecutor>,
+    backend: Box<dyn Backend>,
 }
 
 impl State {
     /// Creates CLI state from loaded configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        Self {
-            config,
-            executor: Box::<LocalCommandExecutor>::default(),
-        }
+        Self::with_backend(config, Box::<LocalBackend>::default())
     }
 
-    pub(crate) fn executor(&self) -> &dyn CommandExecutor {
-        self.executor.as_ref()
+    pub(crate) fn with_backend(config: Config, backend: Box<dyn Backend>) -> Self {
+        Self { config, backend }
+    }
+
+    pub(crate) fn backend(&self) -> &dyn Backend {
+        self.backend.as_ref()
     }
 
     /// Lists running tmux sessions.
@@ -104,7 +105,7 @@ impl State {
     ///
     /// Returns an error if tmux session listing fails.
     pub fn list(&self) -> Result<()> {
-        let mut sessions = tmux::list_sessions(self.executor())?;
+        let mut sessions = tmux::list_sessions(self.backend())?;
         sessions.sort();
         sessions.dedup();
 
@@ -124,20 +125,23 @@ impl State {
 /// cannot be loaded, or the selected command fails.
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    let backend: Box<dyn Backend> = Box::<LocalBackend>::default();
 
     let config_path = cli
         .config_path
         .or_else(|| std::env::var_os(CONFIG_ENV_VAR).map(PathBuf::from))
         .map_or_else(
             || {
-                std::env::home_dir()
+                backend
+                    .home_dir()
                     .context("home directory not found")
                     .map(|home| home.join(".config/piquel/config.json"))
             },
             Ok,
         )?;
 
-    let state = State::new(config::load_config(&config_path)?);
+    let config = config::load_config(&config_path, backend.as_ref())?;
+    let state = State::with_backend(config, backend);
 
     match &cli.command {
         Commands::List => state.list(),

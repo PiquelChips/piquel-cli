@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    io::{self, Write},
-};
+use std::io::{self, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -64,7 +61,7 @@ impl State {
 
         match worktree {
             Some(branch) => self.open_project_branch(&project, template, branch)?,
-            None => tmux::open_session(self.executor(), &project.name, &project.path, template)?,
+            None => tmux::open_session(self.backend(), &project.name, &project.path, template)?,
         }
 
         Ok(())
@@ -102,7 +99,7 @@ impl State {
 
         let branches = self.list_local_branches(&project.path)?;
         if branches.is_empty() {
-            tmux::open_session(self.executor(), &project.name, &project.path, template)?;
+            tmux::open_session(self.backend(), &project.name, &project.path, template)?;
             return Ok(());
         }
 
@@ -134,13 +131,14 @@ impl State {
             worktree.path
         } else {
             let worktree_path = git::managed_worktree_path_for_branch(
+                self.backend(),
                 &self.config.worktrees_dir,
                 &project.name,
                 branch,
                 &worktrees,
             )?;
             if let Some(parent) = worktree_path.parent() {
-                fs::create_dir_all(parent).with_context(|| {
+                self.backend().create_dir_all(parent).with_context(|| {
                     format!(
                         "Failed to create managed worktree directory {}",
                         parent.display()
@@ -152,21 +150,22 @@ impl State {
         };
 
         let tmux_name = format!("{}--{branch}", project.name);
-        tmux::open_session(self.executor(), &tmux_name, &root, template)?;
+        tmux::open_session(self.backend(), &tmux_name, &root, template)?;
         Ok(())
     }
 
     fn list_local_branches(&self, project_path: &std::path::Path) -> Result<Vec<String>> {
-        let output = self
-            .executor()
-            .output(git::list_local_branches_request(project_path)?)?;
+        let output = self.backend().output(git::list_local_branches_request(
+            self.backend(),
+            project_path,
+        )?)?;
         Ok(git::parse_local_branches_output(&output)?)
     }
 
     fn list_worktrees(&self, project_path: &std::path::Path) -> Result<Vec<git::Worktree>> {
         let output = self
-            .executor()
-            .output(git::list_worktrees_request(project_path)?)?;
+            .backend()
+            .output(git::list_worktrees_request(self.backend(), project_path)?)?;
         Ok(git::parse_worktrees_output(&output)?)
     }
 
@@ -176,7 +175,7 @@ impl State {
         worktree_path: &std::path::Path,
         branch: &str,
     ) -> Result<()> {
-        let output = self.executor().output(git::create_worktree_request(
+        let output = self.backend().output(git::create_worktree_request(
             project_path,
             worktree_path,
             branch,
@@ -185,8 +184,8 @@ impl State {
     }
 
     fn ensure_project_path(&self, project: &ResolvedProject) -> Result<()> {
-        if project.path.exists() {
-            if !project.path.is_dir() {
+        if self.backend().path_exists(&project.path)? {
+            if !self.backend().path_is_dir(&project.path)? {
                 bail!(
                     "Project \"{}\" path {} is not a directory",
                     project.name,
@@ -204,7 +203,7 @@ impl State {
             );
         }
 
-        clone_project(self.executor(), project)
+        clone_project(self.backend(), project)
     }
 }
 
@@ -228,12 +227,9 @@ fn prompt_clone_project(project: &ResolvedProject) -> Result<bool> {
     ))
 }
 
-fn clone_project(
-    executor: &dyn crate::executor::CommandExecutor,
-    project: &ResolvedProject,
-) -> Result<()> {
+fn clone_project(backend: &dyn crate::backend::Backend, project: &ResolvedProject) -> Result<()> {
     if let Some(parent) = project.path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
+        backend.create_dir_all(parent).with_context(|| {
             format!(
                 "Failed to create project parent directory {}",
                 parent.display()
@@ -241,7 +237,7 @@ fn clone_project(
         })?;
     }
 
-    let status = executor.status(git::clone_repository_request(
+    let status = backend.status(git::clone_repository_request(
         &project.repository,
         &project.path,
     ))?;
