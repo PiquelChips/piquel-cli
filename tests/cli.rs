@@ -3,10 +3,13 @@
 use std::{
     ffi::OsStr,
     fmt::Write as _,
-    fs,
+    fs::{self, File},
+    io::Write as _,
     path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicUsize, Ordering},
+    thread,
+    time::Duration,
 };
 
 static NEXT_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
@@ -91,7 +94,12 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn write_executable(path: &Path, contents: &str) {
-    fs::write(path, contents).expect("test executable should be written");
+    {
+        let mut file = File::create(path).expect("test executable should be created");
+        file.write_all(contents.as_bytes())
+            .expect("test executable should be written");
+        file.sync_all().expect("test executable should be synced");
+    }
 
     #[cfg(unix)]
     {
@@ -99,6 +107,8 @@ fn write_executable(path: &Path, contents: &str) {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755))
             .expect("test executable should be executable");
     }
+
+    thread::sleep(Duration::from_millis(10));
 }
 
 fn bin_dir_with(temp: &TestDir, binaries: &[(&str, String)]) -> PathBuf {

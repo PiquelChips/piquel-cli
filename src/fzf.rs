@@ -1,6 +1,8 @@
 use std::{
     io::{self, Write},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    thread,
+    time::Duration,
 };
 use thiserror::Error;
 
@@ -38,19 +40,7 @@ fn select_with_program<I>(program: &str, items: I, prompt: &str) -> Result<Optio
 where
     I: IntoIterator<Item = String>,
 {
-    let mut child = Command::new(program)
-        .arg("--prompt")
-        .arg(prompt)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                FzfError::MissingBinary
-            } else {
-                FzfError::Io(e)
-            }
-        })?;
+    let mut child = spawn_fzf(program, prompt)?;
 
     {
         let mut stdin = child
@@ -89,11 +79,53 @@ where
     }
 }
 
+fn spawn_fzf(program: &str, prompt: &str) -> Result<Child, FzfError> {
+    let mut last_error = None;
+
+    for _ in 0..5 {
+        match Command::new(program)
+            .arg("--prompt")
+            .arg(prompt)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => return Ok(child),
+            Err(error) if is_executable_file_busy(&error) => {
+                last_error = Some(error);
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(FzfError::MissingBinary);
+            }
+            Err(error) => return Err(FzfError::Io(error)),
+        }
+    }
+
+    match last_error {
+        Some(error) => Err(FzfError::Io(error)),
+        None => unreachable!("retry loop always runs at least once"),
+    }
+}
+
+fn is_executable_file_busy(error: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        error.raw_os_error() == Some(26)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = error;
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{
-        fs,
+        fs::{self, File},
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -255,7 +287,12 @@ exit 2
     fn test_script_in(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
         let script = dir.join(name);
         let content = format!("#!{}\n{body}", shell_path());
-        fs::write(&script, content).expect("test script should be written");
+        {
+            let mut file = File::create(&script).expect("test script should be created");
+            file.write_all(content.as_bytes())
+                .expect("test script should be written");
+            file.sync_all().expect("test script should be synced");
+        }
 
         #[cfg(unix)]
         {
