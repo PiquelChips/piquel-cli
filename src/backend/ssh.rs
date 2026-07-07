@@ -31,7 +31,7 @@ impl SshBackend {
         let remote_command = parts.join(" ");
 
         CommandRequest::new("ssh")
-            .args(["-t", &self.target, &remote_command])
+            .args(["-t", "--", &self.target, &remote_command])
             .stdin(stdin)
     }
 

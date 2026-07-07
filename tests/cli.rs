@@ -75,10 +75,9 @@ fn path_str(path: &Path) -> &str {
 }
 
 fn shell_path() -> PathBuf {
-    if let Some(shell) = std::env::var_os("SHELL").map(PathBuf::from)
-        && shell.exists()
-    {
-        return shell;
+    let system_sh = PathBuf::from("/bin/sh");
+    if system_sh.exists() {
+        return system_sh;
     }
 
     std::env::var_os("PATH")
@@ -164,12 +163,68 @@ exit 64
     )
 }
 
+fn fake_tmux_argv_script(log: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+printf 'argc=%s\n' "$#" >> "$log"
+for arg in "$@"; do
+    printf '[%s]\n' "$arg" >> "$log"
+done
+
+case "$1" in
+    list-sessions)
+        exit 0
+        ;;
+    new-session)
+        exit 0
+        ;;
+    list-windows)
+        printf 'bootstrap-window\n'
+        exit 0
+        ;;
+    new-window)
+        printf 'window-id\n'
+        exit 0
+        ;;
+    send-keys|kill-window|select-window|attach)
+        exit 0
+        ;;
+esac
+
+exit 64
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log))
+    )
+}
+
+fn machine_config(address: &str) -> String {
+    format!(
+        r#""machines": [
+                {{
+                    "name": "pi",
+                    "address": {},
+                    "username": "ronan"
+                }}
+            ],"#,
+        serde_json::to_string(address).expect("address should serialize")
+    )
+}
+
 fn fake_ssh_script(log: &Path, list_sessions: &str) -> String {
     format!(
         r#"#!{}
 log={}
-target=$2
-cmd=$3
+remote_bin=$(dirname "$0")
+PATH="$remote_bin:$PATH"
+export PATH
+shift
+if [ "$1" = "--" ]; then
+    shift
+fi
+target=$1
+cmd=$2
 printf '%s	%s\n' "$target" "$cmd" >> "$log"
 
 case "$cmd" in
@@ -215,6 +270,42 @@ exit 64
         path_str(&shell_path()),
         shell_quote(path_str(log)),
         list_sessions
+    )
+}
+
+fn fake_ssh_eval_script(log: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+remote_bin=$(dirname "$0")
+PATH="$remote_bin:$PATH"
+export PATH
+shift
+if [ "$1" = "--" ]; then
+    shift
+fi
+target=$1
+cmd=$2
+printf 'target=%s\ncmd=%s\n' "$target" "$cmd" >> "$log"
+sh -c "$cmd"
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log))
+    )
+}
+
+fn fake_remote_sh_script() -> String {
+    format!(
+        r#"#!{}
+if [ "$1" = "-lc" ]; then
+    shift
+    exec {} -c "$@"
+fi
+exec {} "$@"
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(&shell_path())),
+        shell_quote(path_str(&shell_path()))
     )
 }
 
@@ -740,6 +831,44 @@ exit 64
 }
 
 #[test]
+fn list_without_machine_stays_local_even_when_machines_are_configured() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        &format!(
+            r#"{{
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": [] }}] }}
+                }},
+                {}
+                "projects": []
+            }}"#,
+            machine_config("pi.example.test")
+        ),
+    );
+    let tmux_log = temp.path().join("tmux.log");
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "zeta\nalpha\nzeta\n")),
+            ("ssh", fake_ssh_script(&ssh_log, "")),
+        ],
+    );
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "list"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "alpha\nzeta\n", "");
+    assert!(tmux_log.exists(), "tmux should run locally");
+    assert!(!ssh_log.exists(), "ssh should not be invoked without -m");
+}
+
+#[test]
 fn list_with_machine_runs_tmux_over_ssh() {
     let temp = TestDir::new();
     let config = write_config(
@@ -775,6 +904,61 @@ fn list_with_machine_runs_tmux_over_ssh() {
     let log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
     assert!(log.contains("ronan@pi.example.test"));
     assert!(log.contains("'tmux' 'list-sessions' '-F' '#{session_name}'"));
+}
+
+#[test]
+fn machine_ssh_destination_is_terminated_before_remote_command() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        r#"{
+            "default_session": "default",
+            "sessions": {
+                "default": { "windows": [{ "commands": [] }] }
+            },
+            "machines": [
+                {
+                    "name": "pi",
+                    "address": "pi.local",
+                    "username": "-oProxyCommand=bad"
+                }
+            ]
+        }"#,
+    );
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("ssh", fake_ssh_eval_script(&ssh_log)),
+            ("sh", fake_remote_sh_script()),
+            ("tmux", fake_tmux_script(&temp.path().join("tmux.log"), "")),
+        ],
+    );
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "--machine", "pi", "list"])
+        .output()
+        .expect("piquel should run");
+
+    let log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
+    assert!(
+        output.status.success(),
+        "expected success, got status {}\nstdout:\n{}\nstderr:\n{}\nssh log:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        log
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "",
+        "ssh log:\n{log}"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+
+    assert!(log.contains("target=-oProxyCommand=bad@pi.local\n"));
+    assert!(log.contains("cmd='tmux' 'list-sessions' '-F' '#{session_name}'"));
 }
 
 #[test]
@@ -849,6 +1033,81 @@ fn project_load_with_machine_opens_remote_tmux_session() {
     assert!(log.contains("'tmux' 'new-window' '-P' '-F' '#{window_id}' '-n' 'editor' '-t' 'alpha' '-c' '/srv/projects/alpha'"));
     assert!(log.contains("'tmux' 'send-keys' '-t' 'window-id' 'vim .' 'Enter'"));
     assert!(log.contains("'tmux' 'attach' '-t' 'alpha'"));
+}
+
+#[test]
+fn project_load_with_machine_shell_quotes_remote_tmux_arguments() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote project's dir");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let pwned = temp.path().join("shell-was-not-quoted");
+    let command = format!("printf hacked > {}; echo done", path_str(&pwned));
+    let config = write_config(
+        &temp,
+        &format!(
+            r#"{{
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{
+                        "windows": [
+                            {{ "name": "editor's window", "commands": [{}] }}
+                        ]
+                    }}
+                }},
+                {}
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git",
+                        "path": {}
+                    }}
+                ]
+            }}"#,
+            serde_json::to_string(&command).expect("command should serialize"),
+            machine_config("pi.local"),
+            serde_json::to_string(path_str(&project_path)).expect("path should serialize")
+        ),
+    );
+    let ssh_log = temp.path().join("ssh.log");
+    let tmux_log = temp.path().join("tmux.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("ssh", fake_ssh_eval_script(&ssh_log)),
+            ("sh", fake_remote_sh_script()),
+            ("tmux", fake_tmux_argv_script(&tmux_log)),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "-m",
+            "pi",
+            "project",
+            "load",
+            "alpha",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+    assert!(
+        !pwned.exists(),
+        "configured tmux command should be passed as an argument, not executed by the remote shell"
+    );
+
+    let tmux_log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(tmux_log.contains(&format!("[{}]", path_str(&project_path))));
+    assert!(tmux_log.contains("[editor's window]"));
+    assert!(tmux_log.contains(&format!("[{command}]")));
+
+    let ssh_log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
+    assert!(ssh_log.contains("remote project'\\''s dir'"));
+    assert!(ssh_log.contains("'editor'\\''s window'"));
+    assert!(ssh_log.contains("'printf hacked > "));
 }
 
 #[test]
