@@ -154,6 +154,6 @@ pub fn run() -> Result<()> {
             path,
             session,
             name,
-        } => state.session(path.clone(), session.as_deref(), name.as_deref()),
+        } => state.session(path.as_deref(), session.as_deref(), name.as_deref()),
     }
 }

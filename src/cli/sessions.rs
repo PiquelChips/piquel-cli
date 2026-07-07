@@ -49,7 +49,7 @@ impl State {
     /// or tmux cannot open the session.
     pub fn session(
         &self,
-        path: Option<PathBuf>,
+        path: Option<&Path>,
         session_override: Option<&str>,
         name_override: Option<&str>,
     ) -> Result<()> {
@@ -61,7 +61,7 @@ impl State {
             .session_template(template_name)
             .ok_or_else(|| anyhow!("Session template \"{template_name}\" is not configured"))?;
 
-        let root = resolve_session_root(path.as_deref())?;
+        let root = resolve_session_root(path)?;
 
         if !root.exists() {
             bail!("Session path {} does not exist", root.display());
