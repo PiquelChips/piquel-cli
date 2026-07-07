@@ -727,6 +727,45 @@ fn project_load_unknown_session_override_exits_before_tmux() {
 }
 
 #[test]
+fn session_dot_path_uses_current_directory_name() {
+    let temp = TestDir::new();
+    let session_path = temp.path().join("workspaces/alpha");
+    fs::create_dir_all(&session_path).expect("session path should be created");
+    let tmux_log = temp.path().join("tmux.log");
+    let config = write_config(
+        &temp,
+        r#"{
+            "default_session": "default",
+            "sessions": {
+                "default": { "windows": [{ "commands": ["vim ."] }] }
+            }
+        }"#,
+    );
+    let bin = bin_dir_with(&temp, &[("tmux", fake_tmux_script(&tmux_log, ""))]);
+
+    let output = piquel()
+        .current_dir(&session_path)
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "session", "."])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let resolved_session_path = session_path
+        .canonicalize()
+        .expect("session path should resolve");
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains(&format!(
+        "new-session -d -c {} -s alpha",
+        path_str(&resolved_session_path)
+    )));
+    assert!(log.contains("send-keys -t window-id vim . Enter"));
+    assert!(log.contains("attach -t alpha"));
+}
+
+#[test]
 fn project_load_names_configured_tmux_windows() {
     let temp = TestDir::new();
     let project_path = temp.path().join("projects/alpha");
