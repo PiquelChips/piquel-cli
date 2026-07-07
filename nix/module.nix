@@ -21,6 +21,7 @@ let
               lib.makeBinPath [
                 pkgs.fzf
                 pkgs.git
+                pkgs.openssh
                 pkgs.tmux
               ]
             }
@@ -100,6 +101,23 @@ in
                 };
               };
             };
+
+            machineConfigType = types.submodule {
+              options = {
+                name = mkOption {
+                  type = types.str;
+                  description = "Machine name used by piquel's -m/--machine flag.";
+                };
+                address = mkOption {
+                  type = types.str;
+                  description = "SSH server address for the machine.";
+                };
+                username = mkOption {
+                  type = types.str;
+                  description = "SSH username for the machine.";
+                };
+              };
+            };
           in
           {
             projects_dir = mkOption {
@@ -130,6 +148,12 @@ in
               type = types.listOf projectConfigType;
               default = [ ];
               description = "Configured projects.";
+            };
+
+            machines = mkOption {
+              type = types.listOf machineConfigType;
+              default = [ ];
+              description = "Configured SSH machines.";
             };
           };
       };
