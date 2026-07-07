@@ -585,6 +585,71 @@ fn config_flag_takes_precedence_over_environment() {
 }
 
 #[test]
+fn project_list_with_machine_stays_local() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        &format!(
+            r#"{{
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": [] }}] }}
+                }},
+                {}
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git"
+                    }}
+                ]
+            }}"#,
+            machine_config("pi.example.test")
+        ),
+    );
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(&temp, &[("ssh", fake_ssh_script(&ssh_log, ""))]);
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "--machine",
+            "pi",
+            "project",
+            "list",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "alpha\n", "");
+    assert!(!ssh_log.exists(), "project list should not invoke ssh");
+}
+
+#[test]
+fn project_list_with_unknown_machine_fails_before_running_ssh() {
+    let temp = TestDir::new();
+    let config = config_with_projects(&temp);
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(&temp, &[("ssh", fake_ssh_script(&ssh_log, ""))]);
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "--machine",
+            "pi",
+            "project",
+            "list",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(&output, &["Machine \"pi\" is not configured"]);
+    assert!(!ssh_log.exists(), "ssh should not be invoked");
+}
+
+#[test]
 fn missing_config_file_exits_with_clear_error() {
     let temp = TestDir::new();
     let config = temp.path().join("missing.json");

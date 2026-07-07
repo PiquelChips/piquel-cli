@@ -145,13 +145,41 @@ pub fn run() -> Result<()> {
         )?;
 
     let mut config = config::read_config(&config_path)?;
-    let backend: Box<dyn Backend> = match cli.machine.as_deref() {
-        Some(machine_name) => {
-            let machine = config
+    let selected_machine = cli
+        .machine
+        .as_deref()
+        .map(|machine_name| {
+            config
                 .machine(machine_name)
-                .ok_or_else(|| anyhow::anyhow!("Machine \"{machine_name}\" is not configured"))?;
-            Box::new(SshBackend::new(machine))
+                .ok_or_else(|| anyhow::anyhow!("Machine \"{machine_name}\" is not configured"))
+        })
+        .transpose()?;
+
+    if matches!(
+        cli.command,
+        Commands::Project {
+            command: ProjectCommands::List
         }
+    ) {
+        config.validate_and_normalize(&local_backend)?;
+
+        let mut projects = config
+            .projects
+            .iter()
+            .filter_map(|project| project.resolved_name().ok())
+            .collect::<Vec<_>>();
+
+        projects.sort();
+        projects.dedup();
+
+        for project in projects {
+            println!("{project}");
+        }
+        return Ok(());
+    }
+
+    let backend: Box<dyn Backend> = match selected_machine {
+        Some(machine) => Box::new(SshBackend::new(machine)),
         None => Box::new(local_backend),
     };
     config.validate_and_normalize(backend.as_ref())?;
@@ -161,7 +189,7 @@ pub fn run() -> Result<()> {
         Commands::List => state.list(),
         Commands::Pick { project, session } => state.pick(project.as_deref(), session.as_deref()),
         Commands::Project { command } => match command {
-            ProjectCommands::List => state.list_projects(),
+            ProjectCommands::List => Ok(()), // should have been run before state creation
             ProjectCommands::Load {
                 project,
                 session,

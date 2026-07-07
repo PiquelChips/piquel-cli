@@ -63,7 +63,8 @@ piquel -m pi project load piquel-cli
 
 The config file itself is always read locally. When a machine is selected,
 tmux, git, path checks, `~` expansion, directory creation, and program
-validation run through `ssh -t <username>@<address> ...`.
+validation run over SSH. Non-interactive commands use `ssh -T`; attaching to
+tmux uses `ssh -t` so the remote session gets a terminal.
 
 The branch picker lists local git branches only. It does not fetch and does not
 create remote-tracking branches. If the selected branch already has a worktree,
