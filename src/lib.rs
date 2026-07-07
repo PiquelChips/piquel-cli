@@ -23,8 +23,26 @@ use crate::config::ConfigError;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WindowConfig {
+    name: Option<String>,
     #[serde(default)]
     commands: Vec<String>,
+}
+
+impl WindowConfig {
+    fn validate(&self, session_name: &str, index: usize) -> Result<(), config::ConfigError> {
+        if self
+            .name
+            .as_ref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return Err(ConfigError::Validation(format!(
+                "Window {} in session template \"{session_name}\" has an empty name. If you don't want to specify a name, remove the field.",
+                index + 1
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 /// Configuration for a tmux session template.
@@ -46,6 +64,10 @@ impl SessionConfig {
             return Err(ConfigError::Validation(format!(
                 "Session template \"{name}\" must have at least one window"
             )));
+        }
+
+        for (index, window) in self.windows.iter().enumerate() {
+            window.validate(name, index)?;
         }
 
         Ok(())
@@ -292,7 +314,10 @@ mod tests {
     use super::*;
 
     fn window() -> WindowConfig {
-        WindowConfig { commands: vec![] }
+        WindowConfig {
+            name: None,
+            commands: vec![],
+        }
     }
 
     fn session() -> SessionConfig {
@@ -468,6 +493,7 @@ mod tests {
             path: None,
             default_session: Some(ProjectSessionConfig::Inline(SessionConfig {
                 windows: vec![WindowConfig {
+                    name: None,
                     commands: vec!["cargo check".to_owned()],
                 }],
             })),
@@ -495,6 +521,22 @@ mod tests {
                 windows: vec![],
             })),
         });
+
+        assert!(config.validate_and_normalize().is_err());
+    }
+
+    #[test]
+    fn blank_window_names_fail_validation() {
+        let mut config = config_with_default();
+        config.sessions.insert(
+            "default".to_owned(),
+            SessionConfig {
+                windows: vec![WindowConfig {
+                    name: Some("   ".to_owned()),
+                    commands: vec![],
+                }],
+            },
+        );
 
         assert!(config.validate_and_normalize().is_err());
     }

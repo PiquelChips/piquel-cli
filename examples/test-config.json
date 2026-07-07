@@ -6,11 +6,13 @@
         "default": {
             "windows": [
                 {
+                    "name": "editor",
                     "commands": [
                         "vim ."
                     ]
                 },
                 {
+                    "name": "git",
                     "commands": [
                         "git pull"
                     ]
@@ -20,11 +22,13 @@
         "rust": {
             "windows": [
                 {
+                    "name": "editor",
                     "commands": [
                         "vim ."
                     ]
                 },
                 {
+                    "name": "rust",
                     "commands": [
                         "git pull",
                         "cargo clippy"
@@ -39,11 +43,13 @@
             "default_session": {
                 "windows": [
                     {
+                        "name": "editor",
                         "commands": [
                             "vim ."
                         ]
                     },
                     {
+                        "name": "rust",
                         "commands": [
                             "git pull",
                             "cargo clippy"

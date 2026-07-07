@@ -49,6 +49,11 @@ in
 
             windowConfigType = types.submodule {
               options = {
+                name = mkOption {
+                  type = types.nullOr types.str;
+                  default = null;
+                  description = "Optional tmux window name.";
+                };
                 commands = mkOption {
                   type = types.listOf types.str;
                   default = [ ];
