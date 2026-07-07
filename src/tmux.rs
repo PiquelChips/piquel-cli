@@ -1,7 +1,12 @@
-use crate::{SessionConfig, WindowConfig};
+use crate::{
+    SessionConfig, WindowConfig,
+    executor::{
+        CommandExecutor, CommandExecutorError, CommandOutput, CommandRequest, CommandRequests,
+    },
+};
 use std::io;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::ExitStatus;
 use thiserror::Error;
 
 /// Errors produced while invoking tmux.
@@ -21,119 +26,204 @@ pub enum TmuxError {
     InvalidSessionName(String),
 }
 
-/// Lists running tmux sessions, sorted and deduplicated.
-/// Output is in stdout.
-///
-/// # Errors
-///
-/// Returns an error if tmux session listing fails.
-pub fn list_sessions() -> Result<(), TmuxError> {
-    let mut sessions = list_tmux_sessions()?;
-
-    sessions.sort();
-    sessions.dedup();
-
-    for session in &sessions {
-        println!("{session}");
+impl From<CommandExecutorError> for TmuxError {
+    fn from(value: CommandExecutorError) -> Self {
+        match value {
+            CommandExecutorError::Io(err) => TmuxError::Io(err),
+        }
     }
-
-    Ok(())
 }
 
-/// Returns the names of all running tmux sessions.
+/// Returns the command request for listing tmux sessions.
+#[must_use]
+pub fn list_sessions_request() -> CommandRequest {
+    tmux_request(["list-sessions", "-F", "#{session_name}"])
+}
+
+/// Lists running tmux sessions through `executor`.
 ///
 /// # Errors
 ///
-/// Returns an error if tmux fails for any reason other than having no running
-/// server.
-pub fn list_tmux_sessions() -> Result<Vec<String>, TmuxError> {
-    match exec_tmux_return(&["list-sessions", "-F", "#{session_name}"]) {
-        Ok(output) => {
-            let trimmed = output.trim_matches('\n');
-            if trimmed.is_empty() {
-                return Ok(vec![]);
-            }
-            Ok(trimmed.split('\n').map(str::to_owned).collect())
-        }
-        Err(TmuxError::Command(ref msg))
-            if msg.starts_with("no server running on")
-                || msg.starts_with("error connecting to") =>
+/// Returns an error if tmux cannot be invoked or returns an unexpected failure.
+pub fn list_sessions(executor: &dyn CommandExecutor) -> Result<Vec<String>, TmuxError> {
+    let output = executor.output(list_sessions_request())?;
+    parse_list_sessions_output(&output)
+}
+
+/// Parses tmux session names from `list-sessions` output.
+///
+/// # Errors
+///
+/// Returns an error if tmux failed for a reason other than a missing server.
+pub fn parse_list_sessions_output(output: &CommandOutput) -> Result<Vec<String>, TmuxError> {
+    let combined = combined_output(output);
+
+    if !output.status.success() {
+        if combined.starts_with("no server running on")
+            || combined.starts_with("error connecting to")
         {
-            Ok(vec![])
+            return Ok(vec![]);
         }
-        Err(_) => {
-            let raw =
-                exec_tmux_return(&["list-sessions", "-F", "#{session_name}"]).unwrap_or_default();
-            Err(TmuxError::Command(format!(
-                "Failed to list sessions with error: {raw}"
-            )))
-        }
+
+        return Err(TmuxError::Command(format!(
+            "Failed to list sessions with error: {combined}"
+        )));
     }
+
+    let trimmed = combined.trim_matches('\n');
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+
+    Ok(trimmed.split('\n').map(str::to_owned).collect())
 }
 
-/// Attaches to a running tmux session and returns its combined output.
+/// Returns the command request for attaching to a tmux session.
+#[must_use]
+pub fn attach_request(session: &str) -> CommandRequest {
+    tmux_request(["attach", "-t", session])
+}
+
+/// Attaches to an existing tmux session through `executor`.
 ///
 /// # Errors
 ///
 /// Returns an error if tmux cannot attach to the requested session.
-pub fn attach(session: &str) -> Result<String, TmuxError> {
-    exec_tmux_return(&["attach", "-t", session])
+pub fn attach(executor: &dyn CommandExecutor, name: &str) -> Result<String, TmuxError> {
+    let output = executor.output(attach_request(name))?;
+    successful_output(&output)
 }
 
-/// Opens a tmux session for `root` using `template`, creating it when needed.
+/// Returns the command request for creating a detached tmux session.
+#[must_use]
+pub fn new_session_request(tmux_name: &str, root: &Path) -> CommandRequest {
+    tmux_request([
+        "new-session",
+        "-d",
+        "-c",
+        &root.to_string_lossy(),
+        "-s",
+        tmux_name,
+    ])
+}
+
+/// Returns the command request for listing tmux windows.
+#[must_use]
+pub fn list_windows_request(tmux_name: &str) -> CommandRequest {
+    tmux_request(["list-windows", "-t", tmux_name, "-F", "#{window_id}"])
+}
+
+/// Returns the command request for creating a tmux window.
+#[must_use]
+pub fn new_window_request(
+    session_name: &str,
+    start_dir: &Path,
+    window: &WindowConfig,
+) -> CommandRequest {
+    let mut request = tmux_request(["new-window", "-P", "-F", "#{window_id}"]);
+
+    if let Some(name) = &window.name {
+        request = request.args(["-n", name]);
+    }
+
+    request.args([
+        "-t",
+        session_name,
+        "-c",
+        start_dir.to_string_lossy().as_ref(),
+    ])
+}
+
+/// Returns the command request for sending keys to a tmux window.
+#[must_use]
+pub fn send_keys_request(window_id: &str, command: &str) -> CommandRequest {
+    tmux_request(["send-keys", "-t", window_id, command, "Enter"])
+}
+
+/// Returns command requests for all configured commands in a tmux window.
+#[must_use]
+pub fn send_keys_requests(window_id: &str, window: &WindowConfig) -> CommandRequests {
+    let mut requests = CommandRequests::new();
+    requests.extend(
+        window
+            .commands
+            .iter()
+            .map(|command| send_keys_request(window_id, command)),
+    );
+    requests
+}
+
+/// Returns the command request for killing a tmux window.
+#[must_use]
+pub fn kill_window_request(window_id: &str) -> CommandRequest {
+    tmux_request(["kill-window", "-t", window_id])
+}
+
+/// Returns the command request for selecting a tmux window.
+#[must_use]
+pub fn select_window_request(window_id: &str) -> CommandRequest {
+    tmux_request(["select-window", "-t", window_id])
+}
+
+/// Opens a tmux session from `template`, creating it first when necessary.
 ///
 /// # Errors
 ///
-/// Returns an error if the session name is invalid, tmux cannot create or
-/// configure the session, or attaching fails.
+/// Returns an error if the session name is invalid or any tmux command fails.
 pub fn open_session(
+    executor: &dyn CommandExecutor,
     tmux_name: &str,
     root: &Path,
     template: &SessionConfig,
 ) -> Result<(), TmuxError> {
     let tmux_name = validated_session_name(tmux_name)?;
 
-    let sessions = list_tmux_sessions()?;
+    let sessions = list_sessions(executor)?;
     if sessions.contains(&tmux_name) {
-        attach(&tmux_name)?;
+        attach(executor, &tmux_name)?;
         return Ok(());
     }
 
-    exec_tmux(&[
-        "new-session",
-        "-d",
-        "-c",
-        &root.to_string_lossy(),
-        "-s",
-        &tmux_name,
-    ])
-    .map_err(|_| TmuxError::Command(format!("Failed to create session with name {tmux_name}")))?;
+    let status = executor
+        .status(new_session_request(&tmux_name, root))
+        .map_err(|_| {
+            TmuxError::Command(format!("Failed to create session with name {tmux_name}"))
+        })?;
+    successful_status(status).map_err(|_| {
+        TmuxError::Command(format!("Failed to create session with name {tmux_name}"))
+    })?;
 
-    let bootstrap_window =
-        exec_tmux_return(&["list-windows", "-t", &tmux_name, "-F", "#{window_id}"]).map_err(
-            |e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")),
-        )?;
-
+    let output = executor
+        .output(list_windows_request(&tmux_name))
+        .map_err(|e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")))?;
+    let bootstrap_window = successful_output(&output)
+        .map_err(|e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")))?;
     let bootstrap_window = bootstrap_window.trim_matches('\n').to_owned();
     let mut first_window = None;
 
     for (i, window) in template.windows.iter().enumerate() {
-        let window_id = new_window(&tmux_name, root, window).map_err(|e| {
+        let window_id = create_window(executor, &tmux_name, root, window).map_err(|e| {
             TmuxError::Command(format!("Failed to create window {} with error: {e}", i + 1))
         })?;
 
         first_window.get_or_insert(window_id);
     }
 
-    exec_tmux(&["kill-window", "-t", &bootstrap_window])
+    let status = executor
+        .status(kill_window_request(&bootstrap_window))
+        .map_err(|_| TmuxError::Command("Failed to kill first window".to_owned()))?;
+    successful_status(status)
         .map_err(|_| TmuxError::Command("Failed to kill first window".to_owned()))?;
 
     if let Some(first_window) = first_window {
-        exec_tmux(&["select-window", "-t", &first_window])
+        let status = executor
+            .status(select_window_request(&first_window))
+            .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
+        successful_status(status)
             .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
     }
 
-    attach(&tmux_name).map_err(|_| {
+    attach(executor, &tmux_name).map_err(|_| {
         TmuxError::Command(format!(
             "Failed to attach to session with error: {tmux_name}"
         ))
@@ -142,40 +232,46 @@ pub fn open_session(
     Ok(())
 }
 
-/// Creates a new tmux window rooted at `start_dir` and sends its commands.
+/// Converts successful command output into combined stdout and stderr text.
 ///
 /// # Errors
 ///
-/// Returns an error if tmux cannot create the window or send one of the
-/// configured commands.
-pub fn new_window(
-    session_name: &str,
-    start_dir: &Path,
-    window: &WindowConfig,
-) -> Result<String, TmuxError> {
-    let start_dir = start_dir.to_string_lossy();
-    let mut args = vec!["new-window", "-P", "-F", "#{window_id}"];
+/// Returns an error if the command status was unsuccessful.
+pub fn successful_output(output: &CommandOutput) -> Result<String, TmuxError> {
+    let combined = combined_output(output);
+    if output.status.success() {
+        Ok(combined)
+    } else {
+        Err(TmuxError::Command(combined))
+    }
+}
 
-    if let Some(name) = &window.name {
-        args.extend(["-n", name]);
+/// Converts a command exit status into a tmux result.
+///
+/// # Errors
+///
+/// Returns an error if the command status was unsuccessful.
+pub fn successful_status(status: ExitStatus) -> Result<(), TmuxError> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(TmuxError::Command(format!(
+            "tmux exited with status {status}"
+        )))
+    }
+}
+
+/// Converts multiple command exit statuses into a tmux result.
+///
+/// # Errors
+///
+/// Returns an error if any command status was unsuccessful.
+pub fn successful_statuses(statuses: Vec<ExitStatus>) -> Result<(), TmuxError> {
+    for status in statuses {
+        successful_status(status)?;
     }
 
-    args.extend(["-t", session_name, "-c", &start_dir]);
-
-    let window_id = exec_tmux_return(&args)
-        .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
-
-    let window_id = window_id.trim_matches('\n').to_owned();
-
-    for command in &window.commands {
-        exec_tmux_return(&["send-keys", "-t", &window_id, command, "Enter"]).map_err(|e| {
-            TmuxError::Command(format!(
-                "Failed to execute command \"{command}\" with error: {e}"
-            ))
-        })?;
-    }
-
-    Ok(window_id)
+    Ok(())
 }
 
 /// Returns an error when the current process is already running inside tmux.
@@ -244,41 +340,45 @@ pub fn validated_session_name(input: &str) -> Result<String, TmuxError> {
     Ok(sanitized)
 }
 
-fn exec_tmux(args: &[&str]) -> Result<(), TmuxError> {
-    Command::new("tmux")
-        .args(args)
-        .stdin(Stdio::inherit())
-        .status()
-        .map_err(TmuxError::Io)
-        .and_then(|status| {
-            if status.success() {
-                Ok(())
-            } else {
-                Err(TmuxError::Command(format!(
-                    "tmux exited with status {status}"
-                )))
-            }
-        })
+fn tmux_request<'a>(args: impl IntoIterator<Item = &'a str>) -> CommandRequest {
+    CommandRequest::new("tmux").args(args)
 }
 
-fn exec_tmux_return(args: &[&str]) -> Result<String, TmuxError> {
-    let output = Command::new("tmux")
-        .args(args)
-        .stdin(Stdio::inherit())
-        .output()
-        .map_err(TmuxError::Io)?;
+fn create_window(
+    executor: &dyn CommandExecutor,
+    session_name: &str,
+    start_dir: &Path,
+    window: &WindowConfig,
+) -> Result<String, TmuxError> {
+    let output = executor
+        .output(new_window_request(session_name, start_dir, window))
+        .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
+    let window_id = successful_output(&output)
+        .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
+    let window_id = window_id.trim_matches('\n').to_owned();
 
-    let combined = {
-        let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
-        s.push_str(&String::from_utf8_lossy(&output.stderr));
-        s
-    };
-
-    if output.status.success() {
-        Ok(combined)
-    } else {
-        Err(TmuxError::Command(combined))
+    for command in &window.commands {
+        let output = executor
+            .output(send_keys_request(&window_id, command))
+            .map_err(|e| {
+                TmuxError::Command(format!(
+                    "Failed to execute command \"{command}\" with error: {e}"
+                ))
+            })?;
+        successful_output(&output).map_err(|e| {
+            TmuxError::Command(format!(
+                "Failed to execute command \"{command}\" with error: {e}"
+            ))
+        })?;
     }
+
+    Ok(window_id)
+}
+
+fn combined_output(output: &CommandOutput) -> String {
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    combined
 }
 
 #[cfg(test)]
