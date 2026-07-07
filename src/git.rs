@@ -104,6 +104,14 @@ pub fn create_worktree_request(
         .arg(branch)
 }
 
+/// Returns the command request for cloning a repository into `project_path`.
+#[must_use]
+pub fn clone_repository_request(repository: &str, project_path: &Path) -> CommandRequest {
+    CommandRequest::new("git")
+        .args(["clone", repository])
+        .arg(project_path.as_os_str())
+}
+
 /// Parses git worktree creation output.
 ///
 /// # Errors
