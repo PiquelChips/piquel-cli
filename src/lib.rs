@@ -137,6 +137,42 @@ pub enum ProjectSessionConfig {
     Inline(SessionConfig),
 }
 
+/// Configuration for a machine reachable over SSH.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MachineConfig {
+    name: String,
+    address: String,
+    username: String,
+}
+
+impl MachineConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_machine_field(&self.name, "name")?;
+        validate_machine_field(&self.address, "address")?;
+        validate_machine_field(&self.username, "username")?;
+        Ok(())
+    }
+
+    /// Returns the machine name used by the `--machine` flag.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the SSH server address.
+    #[must_use]
+    pub fn address(&self) -> &str {
+        &self.address
+    }
+
+    /// Returns the SSH username.
+    #[must_use]
+    pub fn username(&self) -> &str {
+        &self.username
+    }
+}
+
 /// Complete JSON configuration for the CLI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +187,8 @@ pub struct Config {
     sessions: HashMap<String, SessionConfig>,
     #[serde(default)]
     projects: Vec<ProjectConfig>,
+    #[serde(default)]
+    machines: Vec<MachineConfig>,
 }
 
 impl Config {
@@ -161,6 +199,17 @@ impl Config {
     /// Returns an error if session templates, project names, project paths, or
     /// default-session references are invalid.
     pub fn validate_and_normalize(&mut self, backend: &dyn Backend) -> Result<(), ConfigError> {
+        let mut machine_names = HashSet::new();
+        for machine in &self.machines {
+            machine.validate()?;
+            if !machine_names.insert(machine.name.clone()) {
+                return Err(ConfigError::Validation(format!(
+                    "Duplicate machine name \"{}\"",
+                    machine.name
+                )));
+            }
+        }
+
         self.projects_dir = backend.expand_home(&self.projects_dir)?;
         self.worktrees_dir = backend.expand_home(&self.worktrees_dir)?;
 
@@ -220,6 +269,12 @@ impl Config {
     #[must_use]
     pub fn session_template(&self, name: &str) -> Option<&SessionConfig> {
         self.sessions.get(name)
+    }
+
+    /// Returns the configured machine by name.
+    #[must_use]
+    pub fn machine(&self, name: &str) -> Option<&MachineConfig> {
+        self.machines.iter().find(|machine| machine.name == name)
     }
 
     /// Returns a normalized project by name.
@@ -310,6 +365,16 @@ fn validate_project_name(name: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_machine_field(value: &str, field: &str) -> Result<(), ConfigError> {
+    if value.trim().is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "Machine {field} must not be empty"
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +400,7 @@ mod tests {
             default_session: "default".to_owned(),
             sessions: HashMap::from([("default".to_owned(), session())]),
             projects: vec![],
+            machines: vec![],
         }
     }
 
@@ -457,6 +523,7 @@ mod tests {
             default_session: "missing".to_owned(),
             sessions: HashMap::from([("default".to_owned(), session())]),
             projects: vec![],
+            machines: vec![],
         };
 
         assert!(config.validate_and_normalize(&backend()).is_err());
@@ -471,6 +538,7 @@ mod tests {
                 default_session: name.to_owned(),
                 sessions: HashMap::from([(name.to_owned(), session())]),
                 projects: vec![],
+                machines: vec![],
             };
 
             assert!(
@@ -488,6 +556,7 @@ mod tests {
             default_session: "default".to_owned(),
             sessions: HashMap::from([("default".to_owned(), SessionConfig { windows: vec![] })]),
             projects: vec![],
+            machines: vec![],
         };
 
         assert!(config.validate_and_normalize(&backend()).is_err());
