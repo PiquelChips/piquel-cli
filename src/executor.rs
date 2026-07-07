@@ -351,8 +351,14 @@ mod tests {
         }
     }
 
-    fn shell() -> &'static str {
-        "/bin/sh"
+    fn shell() -> OsString {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+            .flat_map(|path| [path.join("sh"), path.join("bash")])
+            .find(|path| path.exists())
+            .expect("test shell should be available in PATH")
+            .into_os_string()
     }
 
     #[cfg(unix)]

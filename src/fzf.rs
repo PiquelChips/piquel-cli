@@ -105,8 +105,7 @@ mod tests {
     fn cancelled_selection_returns_none() {
         let fake_fzf = test_script(
             "cancelled-fzf",
-            r"#!/bin/sh
-exit 130
+            r"exit 130
 ",
         );
 
@@ -131,8 +130,7 @@ exit 130
             &dir,
             "fzf",
             &format!(
-                r#"#!/bin/sh
-for arg in "$@"; do
+                r#"for arg in "$@"; do
     printf '%s\n' "$arg"
 done > {}
 cat > {}
@@ -167,8 +165,7 @@ printf 'two\n'
     fn successful_empty_selection_returns_none() {
         let fake_fzf = test_script(
             "empty-fzf",
-            r"#!/bin/sh
-cat >/dev/null
+            r"cat >/dev/null
 exit 0
 ",
         );
@@ -189,8 +186,7 @@ exit 0
     fn failed_selection_with_stdout_returns_command_error() {
         let fake_fzf = test_script(
             "failed-fzf",
-            r"#!/bin/sh
-cat >/dev/null
+            r"cat >/dev/null
 printf 'partial\n'
 exit 2
 ",
@@ -225,8 +221,7 @@ exit 2
     fn broken_pipe_while_writing_items_is_treated_as_cancelled() {
         let fake_fzf = test_script(
             "early-exit-fzf",
-            r"#!/bin/sh
-exit 130
+            r"exit 130
 ",
         );
 
@@ -242,9 +237,9 @@ exit 130
         assert_eq!(selection, None);
     }
 
-    fn test_script(name: &str, content: &str) -> PathBuf {
+    fn test_script(name: &str, body: &str) -> PathBuf {
         let dir = test_dir(name);
-        test_script_in(&dir, name, content)
+        test_script_in(&dir, name, body)
     }
 
     fn test_dir(name: &str) -> PathBuf {
@@ -257,8 +252,9 @@ exit 130
         dir
     }
 
-    fn test_script_in(dir: &std::path::Path, name: &str, content: &str) -> PathBuf {
+    fn test_script_in(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
         let script = dir.join(name);
+        let content = format!("#!{}\n{body}", shell_path());
         fs::write(&script, content).expect("test script should be written");
 
         #[cfg(unix)]
@@ -281,5 +277,16 @@ exit 130
                 .expect("test path should be UTF-8")
                 .replace('\'', "'\\''")
         )
+    }
+
+    fn shell_path() -> String {
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+            .flat_map(|path| [path.join("sh"), path.join("bash")])
+            .find(|path| path.exists())
+            .expect("test shell should be available in PATH")
+            .to_string_lossy()
+            .into_owned()
     }
 }

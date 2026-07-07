@@ -81,9 +81,9 @@ fn shell_path() -> PathBuf {
     std::env::var_os("PATH")
         .into_iter()
         .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .map(|path| path.join("sh"))
+        .flat_map(|path| [path.join("sh"), path.join("bash")])
         .find(|path| path.exists())
-        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
+        .expect("test shell should be available in PATH")
 }
 
 fn shell_quote(value: &str) -> String {
