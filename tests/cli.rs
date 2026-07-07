@@ -1821,6 +1821,53 @@ exit 130
 }
 
 #[test]
+fn pick_without_choices_exits_successfully_without_fzf() {
+    let temp = TestDir::new();
+    let config = write_config(
+        &temp,
+        r#"{
+            "default_session": "default",
+            "sessions": {
+                "default": { "windows": [{ "commands": [] }] }
+            },
+            "projects": []
+        }"#,
+    );
+    let tmux_log = temp.path().join("tmux.log");
+    let fzf_log = temp.path().join("fzf.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            (
+                "fzf",
+                format!(
+                    r"#!{}
+touch {}
+exit 1
+",
+                    path_str(&shell_path()),
+                    shell_quote(path_str(&fzf_log))
+                ),
+            ),
+        ],
+    );
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "pick"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("list-sessions -F #{session_name}"));
+    assert!(!fzf_log.exists(), "fzf should not run without choices");
+}
+
+#[test]
 fn pick_with_session_still_attaches_selected_tmux_session_unchanged() {
     let temp = TestDir::new();
     let config = config_with_projects(&temp);

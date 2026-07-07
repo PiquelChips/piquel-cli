@@ -95,6 +95,10 @@ impl State {
         let tmux_sessions = tmux::list_sessions(self.backend())?;
         let (items, mut targets) = build_pick_targets(tmux_sessions, project_names);
 
+        if items.is_empty() {
+            return Ok(None);
+        }
+
         let Some(selection) = Self::select_fzf(items, "piquel> ")? else {
             return Ok(None);
         };
