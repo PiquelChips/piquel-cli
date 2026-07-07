@@ -65,6 +65,13 @@
                                             sessions.default.windows = [
                                                 { commands = [ "echo ready" ]; }
                                             ];
+                                            machines = [
+                                                {
+                                                    name = "pi";
+                                                    address = "100.96.91.58";
+                                                    username = "piquel";
+                                                }
+                                            ];
                                             projects = [
                                                 {
                                                     repository = "https://github.com/PiquelChips/piquel-cli.git";

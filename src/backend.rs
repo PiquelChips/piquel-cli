@@ -10,6 +10,9 @@ use thiserror::Error;
 mod local;
 pub use local::LocalBackend;
 
+mod ssh;
+pub use ssh::SshBackend;
+
 /// Standard input configuration for an executed command.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum CommandInput {

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     Config,
-    backend::{Backend, LocalBackend},
+    backend::{Backend, LocalBackend, SshBackend},
     config, tmux,
 };
 
@@ -22,6 +22,10 @@ pub struct Cli {
     /// custom path to configuration
     #[arg(long = "config", value_name = "path", global = true)]
     config_path: Option<PathBuf>,
+
+    /// configured machine to run commands on over SSH
+    #[arg(short = 'm', long = "machine", value_name = "name", global = true)]
+    machine: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -125,14 +129,14 @@ impl State {
 /// cannot be loaded, or the selected command fails.
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    let backend: Box<dyn Backend> = Box::<LocalBackend>::default();
+    let local_backend = LocalBackend;
 
     let config_path = cli
         .config_path
         .or_else(|| std::env::var_os(CONFIG_ENV_VAR).map(PathBuf::from))
         .map_or_else(
             || {
-                backend
+                local_backend
                     .home_dir()
                     .context("home directory not found")
                     .map(|home| home.join(".config/piquel/config.json"))
@@ -140,14 +144,52 @@ pub fn run() -> Result<()> {
             Ok,
         )?;
 
-    let config = config::load_config(&config_path, backend.as_ref())?;
+    let mut config = config::read_config(&config_path)?;
+    let selected_machine = cli
+        .machine
+        .as_deref()
+        .map(|machine_name| {
+            config
+                .machine(machine_name)
+                .ok_or_else(|| anyhow::anyhow!("Machine \"{machine_name}\" is not configured"))
+        })
+        .transpose()?;
+
+    if matches!(
+        cli.command,
+        Commands::Project {
+            command: ProjectCommands::List
+        }
+    ) {
+        config.validate_and_normalize(&local_backend)?;
+
+        let mut projects = config
+            .projects
+            .iter()
+            .filter_map(|project| project.resolved_name().ok())
+            .collect::<Vec<_>>();
+
+        projects.sort();
+        projects.dedup();
+
+        for project in projects {
+            println!("{project}");
+        }
+        return Ok(());
+    }
+
+    let backend: Box<dyn Backend> = match selected_machine {
+        Some(machine) => Box::new(SshBackend::new(machine)),
+        None => Box::new(local_backend),
+    };
+    config.validate_and_normalize(backend.as_ref())?;
     let state = State::with_backend(config, backend);
 
     match &cli.command {
         Commands::List => state.list(),
         Commands::Pick { project, session } => state.pick(project.as_deref(), session.as_deref()),
         Commands::Project { command } => match command {
-            ProjectCommands::List => state.list_projects(),
+            ProjectCommands::List => Ok(()), // should have been run before state creation
             ProjectCommands::Load {
                 project,
                 session,

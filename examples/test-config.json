@@ -37,6 +37,13 @@
             ]
         }
     },
+    "machines": [
+        {
+            "name": "pi",
+            "address": "100.96.91.58",
+            "username": "piquel"
+        }
+    ],
     "projects": [
         {
             "repository": "git@github.com:PiquelChips/piquel-cli.git",

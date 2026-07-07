@@ -85,7 +85,7 @@ pub fn parse_list_sessions_output(output: &CommandOutput) -> Result<Vec<String>,
 /// Returns the command request for attaching to a tmux session.
 #[must_use]
 pub fn attach_request(session: &str) -> CommandRequest {
-    tmux_request(["attach", "-t", session])
+    tmux_request(["attach", "-t", session]).stdin(CommandInput::Inherit)
 }
 
 /// Attaches to an existing tmux session through `backend`.
@@ -93,9 +93,9 @@ pub fn attach_request(session: &str) -> CommandRequest {
 /// # Errors
 ///
 /// Returns an error if tmux cannot attach to the requested session.
-pub fn attach(backend: &dyn Backend, name: &str) -> Result<String, TmuxError> {
-    let output = backend.output(attach_request(name))?;
-    successful_output(&output)
+pub fn attach(backend: &dyn Backend, name: &str) -> Result<(), TmuxError> {
+    let status = backend.status(attach_request(name))?;
+    successful_status(status)
 }
 
 /// Returns the command request for creating a detached tmux session.
@@ -345,9 +345,7 @@ pub fn validated_session_name(input: &str) -> Result<String, TmuxError> {
 }
 
 fn tmux_request<'a>(args: impl IntoIterator<Item = &'a str>) -> CommandRequest {
-    CommandRequest::new("tmux")
-        .args(args)
-        .stdin(CommandInput::Inherit)
+    CommandRequest::new("tmux").args(args)
 }
 
 fn create_window(
@@ -431,7 +429,7 @@ mod tests {
         );
         assert_eq!(
             attach_request("alpha"),
-            tmux_request(["attach", "-t", "alpha"])
+            tmux_request(["attach", "-t", "alpha"]).stdin(CommandInput::Inherit)
         );
         assert_eq!(
             new_session_request("alpha", Path::new("/repo")),
@@ -552,11 +550,8 @@ mod tests {
         open_session(&backend, "alpha", Path::new("/repo"), &template)
             .expect("existing session should attach");
 
-        assert_eq!(
-            backend.output_requests(),
-            vec![list_sessions_request(), attach_request("alpha")]
-        );
-        assert!(backend.status_requests().is_empty());
+        assert_eq!(backend.output_requests(), vec![list_sessions_request()]);
+        assert_eq!(backend.status_requests(), vec![attach_request("alpha")]);
     }
 
     #[test]
@@ -595,7 +590,6 @@ mod tests {
                 send_keys_request("@1", "vim ."),
                 new_window_request("feature_foo", Path::new("/repo"), &template.windows[1]),
                 send_keys_request("@2", "cargo test"),
-                attach_request("feature_foo"),
             ]
         );
         assert_eq!(
@@ -604,6 +598,7 @@ mod tests {
                 new_session_request("feature_foo", Path::new("/repo")),
                 kill_window_request("@0"),
                 select_window_request("@1"),
+                attach_request("feature_foo"),
             ]
         );
     }
