@@ -98,7 +98,7 @@ impl State {
         let tmux_sessions = tmux::list_sessions(self.executor())?;
         let (items, mut targets) = build_pick_targets(tmux_sessions, project_names);
 
-        let Some(selection) = self.select_fzf(items, "piquel> ")? else {
+        let Some(selection) = Self::select_fzf(items, "piquel> ")? else {
             return Ok(None);
         };
 
@@ -108,7 +108,7 @@ impl State {
             .ok_or_else(|| anyhow!("Selected unknown picker item \"{selection}\""))
     }
 
-    pub(crate) fn select_fzf<I>(&self, items: I, prompt: &str) -> Result<Option<String>>
+    pub(crate) fn select_fzf<I>(items: I, prompt: &str) -> Result<Option<String>>
     where
         I: IntoIterator<Item = String>,
     {

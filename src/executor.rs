@@ -9,8 +9,10 @@ use thiserror::Error;
 /// Standard input configuration for an executed command.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum CommandInput {
-    /// Inherit stdin from the current process.
+    /// Close stdin for the child process.
     #[default]
+    Closed,
+    /// Inherit stdin from the current process.
     Inherit,
     /// Pipe bytes into command stdin.
     Bytes(Vec<u8>),
@@ -209,6 +211,7 @@ impl CommandExecutor for LocalCommandExecutor {
 
 fn stdin_stdio(stdin: &CommandInput) -> Stdio {
     match stdin {
+        CommandInput::Closed => Stdio::null(),
         CommandInput::Inherit => Stdio::inherit(),
         CommandInput::Bytes(_) => Stdio::piped(),
     }
@@ -229,4 +232,17 @@ fn write_stdin(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_requests_close_stdin_by_default() {
+        assert_eq!(
+            CommandRequest::new("program").stdin_config(),
+            &CommandInput::Closed
+        );
+    }
 }

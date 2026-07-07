@@ -1,7 +1,8 @@
 use crate::{
     SessionConfig, WindowConfig,
     executor::{
-        CommandExecutor, CommandExecutorError, CommandOutput, CommandRequest, CommandRequests,
+        CommandExecutor, CommandExecutorError, CommandInput, CommandOutput, CommandRequest,
+        CommandRequests,
     },
 };
 use std::io;
@@ -341,7 +342,9 @@ pub fn validated_session_name(input: &str) -> Result<String, TmuxError> {
 }
 
 fn tmux_request<'a>(args: impl IntoIterator<Item = &'a str>) -> CommandRequest {
-    CommandRequest::new("tmux").args(args)
+    CommandRequest::new("tmux")
+        .args(args)
+        .stdin(CommandInput::Inherit)
 }
 
 fn create_window(

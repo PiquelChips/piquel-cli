@@ -103,7 +103,7 @@ impl State {
             return Ok(());
         }
 
-        let Some(branch) = self.select_fzf(branches, "branch> ")? else {
+        let Some(branch) = Self::select_fzf(branches, "branch> ")? else {
             return Ok(());
         };
 
