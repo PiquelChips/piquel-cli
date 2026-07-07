@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::{
     Config,
-    backend::{Backend, LocalBackend},
+    backend::{Backend, LocalBackend, SshBackend},
     config, tmux,
 };
 
@@ -22,6 +22,10 @@ pub struct Cli {
     /// custom path to configuration
     #[arg(long = "config", value_name = "path", global = true)]
     config_path: Option<PathBuf>,
+
+    /// configured machine to run commands on over SSH
+    #[arg(short = 'm', long = "machine", value_name = "name", global = true)]
+    machine: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -125,14 +129,14 @@ impl State {
 /// cannot be loaded, or the selected command fails.
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    let backend: Box<dyn Backend> = Box::<LocalBackend>::default();
+    let local_backend = LocalBackend;
 
     let config_path = cli
         .config_path
         .or_else(|| std::env::var_os(CONFIG_ENV_VAR).map(PathBuf::from))
         .map_or_else(
             || {
-                backend
+                local_backend
                     .home_dir()
                     .context("home directory not found")
                     .map(|home| home.join(".config/piquel/config.json"))
@@ -140,7 +144,17 @@ pub fn run() -> Result<()> {
             Ok,
         )?;
 
-    let config = config::load_config(&config_path, backend.as_ref())?;
+    let mut config = config::read_config(&config_path)?;
+    let backend: Box<dyn Backend> = match cli.machine.as_deref() {
+        Some(machine_name) => {
+            let machine = config
+                .machine(machine_name)
+                .ok_or_else(|| anyhow::anyhow!("Machine \"{machine_name}\" is not configured"))?;
+            Box::new(SshBackend::new(machine))
+        }
+        None => Box::new(local_backend),
+    };
+    config.validate_and_normalize(backend.as_ref())?;
     let state = State::with_backend(config, backend);
 
     match &cli.command {
