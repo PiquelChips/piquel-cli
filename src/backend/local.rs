@@ -3,6 +3,7 @@ use std::{
     ffi::OsStr,
     fs,
     io::{self, Write},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
 };
@@ -78,10 +79,8 @@ impl Backend for LocalBackend {
             if is_executable_file(path) {
                 return Ok(());
             }
-        } else if env::var_os("PATH")
+        } else if program_path_candidates(program)
             .into_iter()
-            .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
-            .map(|path| path.join(program))
             .any(|path| is_executable_file(&path))
         {
             return Ok(());
@@ -98,6 +97,14 @@ fn program_is_path(program: &OsStr) -> bool {
     path.is_absolute() || path.components().count() > 1
 }
 
+fn program_path_candidates(program: &OsStr) -> Vec<PathBuf> {
+    env::var_os("PATH")
+        .into_iter()
+        .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
+        .map(|path| path.join(program))
+        .collect()
+}
+
 fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = fs::metadata(path) else {
         return false;
@@ -107,16 +114,7 @@ fn is_executable_file(path: &Path) -> bool {
         return false;
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    metadata.permissions().mode() & 0o111 != 0
 }
 
 fn write_stdin(child: &mut std::process::Child, stdin: &CommandInput) -> Result<(), BackendError> {
@@ -160,5 +158,21 @@ mod tests {
             .expect("shell command should run");
 
         assert_eq!(status.code(), Some(7));
+    }
+
+    #[test]
+    fn local_backend_validates_path_programs() {
+        LocalBackend
+            .validate_program(&shell())
+            .expect("shell path should validate");
+    }
+
+    #[test]
+    fn local_backend_rejects_missing_programs() {
+        let err = LocalBackend
+            .validate_program(OsStr::new("piquel-definitely-missing-program"))
+            .expect_err("missing program should be rejected");
+
+        assert!(matches!(err, BackendError::MissingProgram(_)));
     }
 }
