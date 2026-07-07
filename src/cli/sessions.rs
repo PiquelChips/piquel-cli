@@ -61,10 +61,7 @@ impl State {
             .session_template(template_name)
             .ok_or_else(|| anyhow!("Session template \"{template_name}\" is not configured"))?;
 
-        let root = match path {
-            Some(path) => expand_home(&path),
-            None => std::env::current_dir().context("Failed to determine current directory")?,
-        };
+        let root = resolve_session_root(path.as_deref())?;
 
         if !root.exists() {
             bail!("Session path {} does not exist", root.display());
@@ -123,6 +120,16 @@ fn expand_home(path: &Path) -> PathBuf {
         return home.join(stripped);
     }
     path.to_path_buf()
+}
+
+fn resolve_session_root(path: Option<&Path>) -> Result<PathBuf> {
+    match path {
+        Some(path) if path == Path::new(".") => {
+            std::env::current_dir().context("Failed to determine current directory")
+        }
+        Some(path) => Ok(expand_home(path)),
+        None => std::env::current_dir().context("Failed to determine current directory"),
+    }
 }
 
 fn build_pick_targets<T, P>(
