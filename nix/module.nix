@@ -16,7 +16,7 @@ let
       }
       ''
         makeWrapper ${pkgs.callPackage ./pkg.nix { }}/bin/piquel $out/bin/piquel \
-            --add-flags "--config ${configFile}" \
+            --set PIQUEL_CONFIG ${configFile} \
             --prefix PATH : ${
               lib.makeBinPath [
                 pkgs.fzf

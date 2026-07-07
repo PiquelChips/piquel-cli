@@ -8,6 +8,8 @@ use crate::{config, tmux};
 mod projects;
 mod sessions;
 
+const CONFIG_ENV_VAR: &str = "PIQUEL_CONFIG";
+
 /// Command-line parser and dispatch.
 #[derive(Parser, Debug)]
 #[command(name = "piquel")]
@@ -81,12 +83,17 @@ pub enum ProjectCommands {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    let config_path = match cli.config_path {
-        Some(path) => path,
-        None => std::env::home_dir()
-            .context("home directory not found")?
-            .join(".config/piquel/config.json"),
-    };
+    let config_path = cli
+        .config_path
+        .or_else(|| std::env::var_os(CONFIG_ENV_VAR).map(PathBuf::from))
+        .map_or_else(
+            || {
+                std::env::home_dir()
+                    .context("home directory not found")
+                    .map(|home| home.join(".config/piquel/config.json"))
+            },
+            Ok,
+        )?;
 
     config::load_config(&config_path)?;
 

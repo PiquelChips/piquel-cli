@@ -344,6 +344,51 @@ fn project_list_prints_sorted_configured_projects() {
 }
 
 #[test]
+fn config_path_can_come_from_environment() {
+    let temp = TestDir::new();
+    let config = config_with_projects(&temp);
+
+    let output = piquel()
+        .env("PIQUEL_CONFIG", path_str(&config))
+        .args(["project", "list"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "alpha\nzeta\n", "");
+}
+
+#[test]
+fn config_flag_takes_precedence_over_environment() {
+    let temp = TestDir::new();
+    let env_config = temp.path().join("env-config.json");
+    fs::write(
+        &env_config,
+        r#"{
+            "projects_dir": "/tmp/projects",
+            "default_session": "default",
+            "sessions": {
+                "default": { "windows": [{ "commands": [] }] }
+            },
+            "projects": [
+                {
+                    "repository": "https://github.com/owner/env-project.git"
+                }
+            ]
+        }"#,
+    )
+    .expect("env config should be written");
+    let flag_config = config_with_projects(&temp);
+
+    let output = piquel()
+        .env("PIQUEL_CONFIG", path_str(&env_config))
+        .args(["--config", path_str(&flag_config), "project", "list"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "alpha\nzeta\n", "");
+}
+
+#[test]
 fn missing_config_file_exits_with_clear_error() {
     let temp = TestDir::new();
     let config = temp.path().join("missing.json");
