@@ -558,6 +558,50 @@ fn project_load_creates_tmux_session_from_configured_template() {
 }
 
 #[test]
+fn project_load_names_configured_tmux_windows() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    fs::create_dir_all(&project_path).expect("project path should be created");
+    let tmux_log = temp.path().join("tmux.log");
+    let config = write_config(
+        &temp,
+        &format!(
+            r#"{{
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{
+                        "windows": [
+                            {{ "name": "editor", "commands": ["vim ."] }}
+                        ]
+                    }}
+                }},
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git",
+                        "path": {}
+                    }}
+                ]
+            }}"#,
+            serde_json::to_string(path_str(&project_path)).expect("path should serialize")
+        ),
+    );
+    let bin = bin_dir_with(&temp, &[("tmux", fake_tmux_script(&tmux_log, ""))]);
+
+    let output = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "project", "load", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+
+    let log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(log.contains("new-window -P -F #{window_id} -n editor -t alpha"));
+    assert!(log.contains("send-keys -t window-id vim . Enter"));
+}
+
+#[test]
 fn project_load_worktree_opens_requested_branch_worktree() {
     let temp = TestDir::new();
     let project_path = temp.path().join("projects/alpha");
