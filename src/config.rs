@@ -27,10 +27,19 @@ pub enum ConfigError {
 /// Returns an error if the file cannot be read, the JSON cannot be parsed, or
 /// validation fails.
 pub fn load_config(config_path: &Path, backend: &dyn Backend) -> Result<Config, ConfigError> {
+    let mut parsed = read_config(config_path)?;
+    parsed.validate_and_normalize(backend)?;
+    Ok(parsed)
+}
+
+/// Reads the JSON config from `config_path` without normalizing backend paths.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or the JSON cannot be parsed.
+pub fn read_config(config_path: &Path) -> Result<Config, ConfigError> {
     let config_file = std::fs::read_to_string(config_path)
         .map_err(|_| ConfigError::FileNotFound(config_path.to_owned()))?;
 
-    let mut parsed: Config = serde_json::from_str(&config_file).map_err(ConfigError::ParseError)?;
-    parsed.validate_and_normalize(backend)?;
-    Ok(parsed)
+    serde_json::from_str(&config_file).map_err(ConfigError::ParseError)
 }
