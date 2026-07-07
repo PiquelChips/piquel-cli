@@ -1,4 +1,7 @@
-use std::fs;
+use std::{
+    fs,
+    io::{self, Write},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -57,7 +60,7 @@ impl State {
                 anyhow!("Session template \"{template_name}\" is not configured")
             })?;
 
-        validate_project_path(&project)?;
+        self.ensure_project_path(&project)?;
 
         match worktree {
             Some(branch) => self.open_project_branch(&project, template, branch)?,
@@ -95,7 +98,7 @@ impl State {
                 anyhow!("Session template \"{template_name}\" is not configured")
             })?;
 
-        validate_project_path(&project)?;
+        self.ensure_project_path(&project)?;
 
         let branches = self.list_local_branches(&project.path)?;
         if branches.is_empty() {
@@ -180,24 +183,73 @@ impl State {
         ))?;
         Ok(git::parse_create_worktree_output(&output)?)
     }
+
+    fn ensure_project_path(&self, project: &ResolvedProject) -> Result<()> {
+        if project.path.exists() {
+            if !project.path.is_dir() {
+                bail!(
+                    "Project \"{}\" path {} is not a directory",
+                    project.name,
+                    project.path.display(),
+                );
+            }
+            return Ok(());
+        }
+
+        if !prompt_clone_project(project)? {
+            bail!(
+                "Project \"{}\" path {} does not exist; clone cancelled",
+                project.name,
+                project.path.display()
+            );
+        }
+
+        clone_project(self.executor(), project)
+    }
 }
 
-fn validate_project_path(project: &ResolvedProject) -> Result<()> {
-    if !project.path.exists() {
-        bail!(
-            "Project \"{}\" path {} does not exist; configured repository is {}",
-            project.name,
-            project.path.display(),
-            project.repository
-        );
+fn prompt_clone_project(project: &ResolvedProject) -> Result<bool> {
+    eprint!(
+        "Project \"{}\" path {} does not exist. Clone {} there? [y/N] ",
+        project.name,
+        project.path.display(),
+        project.repository
+    );
+    io::stderr().flush().context("Failed to flush stderr")?;
+
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .context("Failed to read clone confirmation")?;
+
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+fn clone_project(
+    executor: &dyn crate::executor::CommandExecutor,
+    project: &ResolvedProject,
+) -> Result<()> {
+    if let Some(parent) = project.path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create project parent directory {}",
+                parent.display()
+            )
+        })?;
     }
 
-    if !project.path.is_dir() {
+    let status = executor.status(git::clone_repository_request(
+        &project.repository,
+        &project.path,
+    ))?;
+    if !status.success() {
         bail!(
-            "Project \"{}\" path {} is not a directory; configured repository is {}",
-            project.name,
-            project.path.display(),
-            project.repository
+            "Failed to clone repository {} into {}",
+            project.repository,
+            project.path.display()
         );
     }
 

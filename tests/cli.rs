@@ -270,6 +270,23 @@ branch refs/heads/feature/foo
     )
 }
 
+fn fake_git_clone_script(log: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+if [ "$1" = "clone" ]; then
+    printf '%s\n' "$*" >> "$log"
+    mkdir -p "$3"
+    exit 0
+fi
+
+exit 64
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log))
+    )
+}
+
 fn assert_success(output: &Output, stdout: &str, stderr: &str) {
     assert!(
         output.status.success(),
@@ -540,14 +557,101 @@ fn project_load_rejects_missing_project_path_before_opening_tmux_session() {
             ]
         }"#,
     );
+    let tmux_log = temp.path().join("tmux.log");
+    let bin = bin_dir_with(&temp, &[("tmux", fake_tmux_script(&tmux_log, ""))]);
 
-    let output = piquel()
+    let mut child = piquel()
         .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
         .args(["--config", path_str(&config), "project", "load", "alpha"])
-        .output()
-        .expect("piquel should run");
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("piquel should spawn");
+    std::io::Write::write_all(child.stdin.as_mut().expect("stdin should be piped"), b"n\n")
+        .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("piquel output should be readable");
 
-    assert_failure(&output, &["Project \"alpha\" path", "does not exist"]);
+    assert_failure(&output, &["Clone", "cancelled"]);
+    assert!(!tmux_log.exists(), "tmux should not be opened");
+}
+
+#[test]
+fn project_load_clones_missing_project_then_opens_tmux_session() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("projects/alpha");
+    let tmux_log = temp.path().join("tmux.log");
+    let git_log = temp.path().join("git.log");
+    let config = write_config(
+        &temp,
+        &format!(
+            r#"{{
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": [] }}] }}
+                }},
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git",
+                        "path": {}
+                    }}
+                ]
+            }}"#,
+            serde_json::to_string(path_str(&project_path)).expect("path should serialize")
+        ),
+    );
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("tmux", fake_tmux_script(&tmux_log, "")),
+            ("git", fake_git_clone_script(&git_log)),
+        ],
+    );
+
+    let mut child = piquel()
+        .env_remove("TMUX")
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "project", "load", "alpha"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("piquel should spawn");
+    std::io::Write::write_all(
+        child.stdin.as_mut().expect("stdin should be piped"),
+        b"yes\n",
+    )
+    .expect("stdin should be writable");
+    let output = child
+        .wait_with_output()
+        .expect("piquel output should be readable");
+
+    assert_success(
+        &output,
+        "",
+        &format!(
+            "Project \"alpha\" path {} does not exist. Clone https://github.com/owner/alpha.git there? [y/N] ",
+            project_path.display()
+        ),
+    );
+
+    let git_log = fs::read_to_string(git_log).expect("git log should be readable");
+    assert_eq!(
+        git_log,
+        format!(
+            "clone https://github.com/owner/alpha.git {}\n",
+            path_str(&project_path)
+        )
+    );
+
+    let tmux_log = fs::read_to_string(tmux_log).expect("tmux log should be readable");
+    assert!(tmux_log.contains(&format!(
+        "new-session -d -c {} -s alpha",
+        path_str(&project_path)
+    )));
 }
 
 #[test]
