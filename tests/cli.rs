@@ -219,13 +219,14 @@ log={}
 remote_bin=$(dirname "$0")
 PATH="$remote_bin:$PATH"
 export PATH
+tty_flag=$1
 shift
 if [ "$1" = "--" ]; then
     shift
 fi
 target=$1
 cmd=$2
-printf '%s	%s\n' "$target" "$cmd" >> "$log"
+printf '%s	%s	%s\n' "$tty_flag" "$target" "$cmd" >> "$log"
 
 case "$cmd" in
     *"printf "*"HOME"*)
@@ -280,13 +281,14 @@ log={}
 remote_bin=$(dirname "$0")
 PATH="$remote_bin:$PATH"
 export PATH
+tty_flag=$1
 shift
 if [ "$1" = "--" ]; then
     shift
 fi
 target=$1
 cmd=$2
-printf 'target=%s\ncmd=%s\n' "$target" "$cmd" >> "$log"
+printf 'tty=%s\ntarget=%s\ncmd=%s\n' "$tty_flag" "$target" "$cmd" >> "$log"
 sh -c "$cmd"
 "#,
         path_str(&shell_path()),
@@ -903,7 +905,10 @@ fn list_with_machine_runs_tmux_over_ssh() {
 
     let log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
     assert!(log.contains("ronan@pi.example.test"));
-    assert!(log.contains("'tmux' 'list-sessions' '-F' '#{session_name}'"));
+    assert!(
+        log.contains("-T\tronan@pi.example.test\t'tmux' 'list-sessions' '-F' '#{session_name}'")
+    );
+    assert!(!log.contains("-t\tronan@pi.example.test\t'tmux' 'list-sessions'"));
 }
 
 #[test]
@@ -957,6 +962,7 @@ fn machine_ssh_destination_is_terminated_before_remote_command() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 
+    assert!(log.contains("tty=-T\n"));
     assert!(log.contains("target=-oProxyCommand=bad@pi.local\n"));
     assert!(log.contains("cmd='tmux' 'list-sessions' '-F' '#{session_name}'"));
 }
@@ -1029,10 +1035,12 @@ fn project_load_with_machine_opens_remote_tmux_session() {
 
     let log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
     assert!(log.contains("ronan@pi.local"));
-    assert!(log.contains("'tmux' 'new-session' '-d' '-c' '/srv/projects/alpha' '-s' 'alpha'"));
+    assert!(log.contains(
+        "-T\tronan@pi.local\t'tmux' 'new-session' '-d' '-c' '/srv/projects/alpha' '-s' 'alpha'"
+    ));
     assert!(log.contains("'tmux' 'new-window' '-P' '-F' '#{window_id}' '-n' 'editor' '-t' 'alpha' '-c' '/srv/projects/alpha'"));
     assert!(log.contains("'tmux' 'send-keys' '-t' 'window-id' 'vim .' 'Enter'"));
-    assert!(log.contains("'tmux' 'attach' '-t' 'alpha'"));
+    assert!(log.contains("-t\tronan@pi.local\t'tmux' 'attach' '-t' 'alpha'"));
 }
 
 #[test]

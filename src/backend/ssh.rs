@@ -25,24 +25,30 @@ impl SshBackend {
         }
     }
 
-    fn ssh_request(&self, request: &CommandRequest, stdin: CommandInput) -> CommandRequest {
+    fn ssh_request(
+        &self,
+        request: &CommandRequest,
+        stdin: CommandInput,
+        allocate_tty: bool,
+    ) -> CommandRequest {
         let mut parts = vec![shell_quote_os(request.program())];
         parts.extend(request.args_os().map(shell_quote_os));
         let remote_command = parts.join(" ");
+        let tty_flag = if allocate_tty { "-t" } else { "-T" };
 
         CommandRequest::new("ssh")
-            .args(["-t", "--", &self.target, &remote_command])
+            .args([tty_flag, "--", &self.target, &remote_command])
             .stdin(stdin)
     }
 
     fn shell_status(&self, request: &CommandRequest) -> Result<ExitStatus, BackendError> {
         self.local
-            .status(self.ssh_request(request, CommandInput::Closed))
+            .status(self.ssh_request(request, CommandInput::Closed, false))
     }
 
     fn shell_output(&self, request: &CommandRequest) -> Result<CommandOutput, BackendError> {
         self.local
-            .output(self.ssh_request(request, CommandInput::Closed))
+            .output(self.ssh_request(request, CommandInput::Closed, false))
     }
 
     fn bool_status(&self, request: &CommandRequest) -> Result<bool, BackendError> {
@@ -55,13 +61,14 @@ impl Backend for SshBackend {
     fn output(&self, request: CommandRequest) -> Result<CommandOutput, BackendError> {
         self.validate_program(request.program())?;
         self.local
-            .output(self.ssh_request(&request, request.stdin_config().clone()))
+            .output(self.ssh_request(&request, request.stdin_config().clone(), false))
     }
 
     fn status(&self, request: CommandRequest) -> Result<ExitStatus, BackendError> {
         self.validate_program(request.program())?;
+        let allocate_tty = matches!(request.stdin_config(), CommandInput::Inherit);
         self.local
-            .status(self.ssh_request(&request, request.stdin_config().clone()))
+            .status(self.ssh_request(&request, request.stdin_config().clone(), allocate_tty))
     }
 
     fn home_dir(&self) -> Result<PathBuf, BackendError> {
