@@ -2,7 +2,7 @@ use std::fs;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{Config, ResolvedProject, SessionConfig, cli::State, fzf, git, tmux};
+use crate::{ResolvedProject, SessionConfig, cli::State, git, tmux};
 
 impl State {
     /// Lists configured projects.
@@ -60,8 +60,8 @@ impl State {
         validate_project_path(&project)?;
 
         match worktree {
-            Some(branch) => open_project_branch(&self.config, &project, template, branch)?,
-            None => tmux::open_session(&project.name, &project.path, template)?,
+            Some(branch) => self.open_project_branch(&project, template, branch)?,
+            None => tmux::open_session(self.executor(), &project.name, &project.path, template)?,
         }
 
         Ok(())
@@ -97,18 +97,88 @@ impl State {
 
         validate_project_path(&project)?;
 
-        let branches = git::list_local_branches(&project.path)?;
+        let branches = self.list_local_branches(&project.path)?;
         if branches.is_empty() {
-            tmux::open_session(&project.name, &project.path, template)?;
+            tmux::open_session(self.executor(), &project.name, &project.path, template)?;
             return Ok(());
         }
 
-        let Some(branch) = fzf::select(branches, "branch> ")? else {
+        let Some(branch) = Self::select_fzf(branches, "branch> ")? else {
             return Ok(());
         };
 
-        open_project_branch(&self.config, &project, template, &branch)?;
+        self.open_project_branch(&project, template, &branch)?;
         Ok(())
+    }
+
+    fn open_project_branch(
+        &self,
+        project: &ResolvedProject,
+        template: &SessionConfig,
+        branch: &str,
+    ) -> Result<()> {
+        let branches = self.list_local_branches(&project.path)?;
+        if !branches.iter().any(|candidate| candidate == branch) {
+            bail!(
+                "Branch \"{}\" is not a local branch for project \"{}\"",
+                branch,
+                project.name
+            );
+        }
+
+        let worktrees = self.list_worktrees(&project.path)?;
+        let root = if let Some(worktree) = git::worktree_for_branch(&worktrees, branch) {
+            worktree.path
+        } else {
+            let worktree_path = git::managed_worktree_path_for_branch(
+                &self.config.worktrees_dir,
+                &project.name,
+                branch,
+                &worktrees,
+            )?;
+            if let Some(parent) = worktree_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!(
+                        "Failed to create managed worktree directory {}",
+                        parent.display()
+                    )
+                })?;
+            }
+            self.create_worktree(&project.path, &worktree_path, branch)?;
+            worktree_path
+        };
+
+        let tmux_name = format!("{}--{branch}", project.name);
+        tmux::open_session(self.executor(), &tmux_name, &root, template)?;
+        Ok(())
+    }
+
+    fn list_local_branches(&self, project_path: &std::path::Path) -> Result<Vec<String>> {
+        let output = self
+            .executor()
+            .output(git::list_local_branches_request(project_path)?)?;
+        Ok(git::parse_local_branches_output(&output)?)
+    }
+
+    fn list_worktrees(&self, project_path: &std::path::Path) -> Result<Vec<git::Worktree>> {
+        let output = self
+            .executor()
+            .output(git::list_worktrees_request(project_path)?)?;
+        Ok(git::parse_worktrees_output(&output)?)
+    }
+
+    fn create_worktree(
+        &self,
+        project_path: &std::path::Path,
+        worktree_path: &std::path::Path,
+        branch: &str,
+    ) -> Result<()> {
+        let output = self.executor().output(git::create_worktree_request(
+            project_path,
+            worktree_path,
+            branch,
+        ))?;
+        Ok(git::parse_create_worktree_output(&output)?)
     }
 }
 
@@ -131,47 +201,5 @@ fn validate_project_path(project: &ResolvedProject) -> Result<()> {
         );
     }
 
-    Ok(())
-}
-
-fn open_project_branch(
-    config: &Config,
-    project: &ResolvedProject,
-    template: &SessionConfig,
-    branch: &str,
-) -> Result<()> {
-    let branches = git::list_local_branches(&project.path)?;
-    if !branches.iter().any(|candidate| candidate == branch) {
-        bail!(
-            "Branch \"{}\" is not a local branch for project \"{}\"",
-            branch,
-            project.name
-        );
-    }
-
-    let worktrees = git::list_worktrees(&project.path)?;
-    let root = if let Some(worktree) = git::worktree_for_branch(&worktrees, branch) {
-        worktree.path
-    } else {
-        let worktree_path = git::managed_worktree_path_for_branch(
-            &config.worktrees_dir,
-            &project.name,
-            branch,
-            &worktrees,
-        )?;
-        if let Some(parent) = worktree_path.parent() {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "Failed to create managed worktree directory {}",
-                    parent.display()
-                )
-            })?;
-        }
-        git::create_worktree(&project.path, &worktree_path, branch)?;
-        worktree_path
-    };
-
-    let tmux_name = format!("{}--{branch}", project.name);
-    tmux::open_session(&tmux_name, &root, template)?;
     Ok(())
 }

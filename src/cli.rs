@@ -3,7 +3,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{Config, config, tmux};
+use crate::{
+    Config, config,
+    executor::{CommandExecutor, LocalCommandExecutor},
+    tmux,
+};
 
 mod projects;
 mod sessions;
@@ -77,13 +81,21 @@ pub enum ProjectCommands {
 /// Runtime state shared by CLI command handlers.
 pub struct State {
     config: Config,
+    executor: Box<dyn CommandExecutor>,
 }
 
 impl State {
     /// Creates CLI state from loaded configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            executor: Box::<LocalCommandExecutor>::default(),
+        }
+    }
+
+    pub(crate) fn executor(&self) -> &dyn CommandExecutor {
+        self.executor.as_ref()
     }
 
     /// Lists running tmux sessions.
@@ -92,7 +104,14 @@ impl State {
     ///
     /// Returns an error if tmux session listing fails.
     pub fn list(&self) -> Result<()> {
-        tmux::list_sessions()?;
+        let mut sessions = tmux::list_sessions(self.executor())?;
+        sessions.sort();
+        sessions.dedup();
+
+        for session in sessions {
+            println!("{session}");
+        }
+
         Ok(())
     }
 }

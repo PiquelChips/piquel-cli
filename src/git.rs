@@ -1,9 +1,10 @@
 use std::{
     io,
     path::{Path, PathBuf},
-    process::Command,
 };
 use thiserror::Error;
+
+use crate::executor::{CommandExecutorError, CommandOutput, CommandRequest};
 
 /// A git worktree discovered from `git worktree list --porcelain`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,29 +51,37 @@ pub enum GitError {
     Parse(String),
 }
 
-/// Lists local branch names for `project_path`, sorted by git.
+impl From<CommandExecutorError> for GitError {
+    fn from(value: CommandExecutorError) -> Self {
+        match value {
+            CommandExecutorError::Io(err) => GitError::Io(err),
+        }
+    }
+}
+
+/// Returns the command request for listing local branch names.
 ///
 /// # Errors
 ///
-/// Returns an error if `project_path` does not exist or git fails.
-pub fn list_local_branches(project_path: &Path) -> Result<Vec<String>, GitError> {
+/// Returns an error if `project_path` does not exist.
+pub fn list_local_branches_request(project_path: &Path) -> Result<CommandRequest, GitError> {
     if !project_path.exists() {
         return Err(GitError::MissingProjectPath(project_path.to_owned()));
     }
 
-    let output = Command::new("git")
+    Ok(CommandRequest::new("git")
         .arg("-C")
-        .arg(project_path)
-        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"])
-        .output()
-        .map_err(GitError::Io)?;
+        .arg(project_path.as_os_str())
+        .args(["for-each-ref", "--format=%(refname:short)", "refs/heads"]))
+}
 
-    let combined = {
-        let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
-        s.push_str(&String::from_utf8_lossy(&output.stderr));
-        s
-    };
-
+/// Parses local branch names from git output.
+///
+/// # Errors
+///
+/// Returns an error if git exited unsuccessfully.
+pub fn parse_local_branches_output(output: &CommandOutput) -> Result<Vec<String>, GitError> {
+    let combined = combined_output(output);
     if !output.status.success() {
         return Err(GitError::Command(combined));
     }
@@ -80,61 +89,57 @@ pub fn list_local_branches(project_path: &Path) -> Result<Vec<String>, GitError>
     Ok(parse_local_branches(&combined))
 }
 
-/// Creates a git worktree for `branch` at `worktree_path`.
-///
-/// # Errors
-///
-/// Returns an error if git fails.
-pub fn create_worktree(
+/// Returns the command request for creating a git worktree.
+#[must_use]
+pub fn create_worktree_request(
     project_path: &Path,
     worktree_path: &Path,
     branch: &str,
-) -> Result<(), GitError> {
-    let output = Command::new("git")
+) -> CommandRequest {
+    CommandRequest::new("git")
         .arg("-C")
-        .arg(project_path)
+        .arg(project_path.as_os_str())
         .args(["worktree", "add"])
-        .arg(worktree_path)
+        .arg(worktree_path.as_os_str())
         .arg(branch)
-        .output()
-        .map_err(GitError::Io)?;
+}
 
+/// Parses git worktree creation output.
+///
+/// # Errors
+///
+/// Returns an error if git exited unsuccessfully.
+pub fn parse_create_worktree_output(output: &CommandOutput) -> Result<(), GitError> {
     if output.status.success() {
         return Ok(());
     }
 
-    let combined = {
-        let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
-        s.push_str(&String::from_utf8_lossy(&output.stderr));
-        s
-    };
-    Err(GitError::Command(combined))
+    Err(GitError::Command(combined_output(output)))
 }
 
-/// Lists all git worktrees for `project_path`.
+/// Returns the command request for listing all git worktrees.
 ///
 /// # Errors
 ///
-/// Returns an error if `project_path` does not exist, git fails, or the
-/// porcelain output cannot be parsed.
-pub fn list_worktrees(project_path: &Path) -> Result<Vec<Worktree>, GitError> {
+/// Returns an error if `project_path` does not exist.
+pub fn list_worktrees_request(project_path: &Path) -> Result<CommandRequest, GitError> {
     if !project_path.exists() {
         return Err(GitError::MissingProjectPath(project_path.to_owned()));
     }
 
-    let output = Command::new("git")
+    Ok(CommandRequest::new("git")
         .arg("-C")
-        .arg(project_path)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .map_err(GitError::Io)?;
+        .arg(project_path.as_os_str())
+        .args(["worktree", "list", "--porcelain"]))
+}
 
-    let combined = {
-        let mut s = String::from_utf8_lossy(&output.stdout).into_owned();
-        s.push_str(&String::from_utf8_lossy(&output.stderr));
-        s
-    };
-
+/// Parses git worktree list output.
+///
+/// # Errors
+///
+/// Returns an error if git exited unsuccessfully or output cannot be parsed.
+pub fn parse_worktrees_output(output: &CommandOutput) -> Result<Vec<Worktree>, GitError> {
+    let combined = combined_output(output);
     if !output.status.success() {
         return Err(GitError::Command(combined));
     }
@@ -142,13 +147,17 @@ pub fn list_worktrees(project_path: &Path) -> Result<Vec<Worktree>, GitError> {
     parse_worktrees(&combined)
 }
 
-/// Finds the worktree for `branch` under `project_path`.
+/// Finds the worktree for `branch` in an already-discovered worktree list.
 ///
 /// # Errors
 ///
-/// Returns an error if worktree listing fails or no worktree matches `branch`.
-pub fn find_worktree(project_path: &Path, branch: &str) -> Result<Worktree, GitError> {
-    find_worktree_in(list_worktrees(project_path)?, project_path, branch)
+/// Returns an error if no worktree matches `branch`.
+pub fn find_worktree(
+    worktrees: Vec<Worktree>,
+    project_path: &Path,
+    branch: &str,
+) -> Result<Worktree, GitError> {
+    find_worktree_in(worktrees, project_path, branch)
 }
 
 /// Finds the worktree for `branch` in an already-discovered worktree list.
@@ -209,6 +218,12 @@ fn parse_local_branches(input: &str) -> Vec<String> {
         .collect::<Vec<_>>();
     branches.sort();
     branches
+}
+
+fn combined_output(output: &CommandOutput) -> String {
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    combined
 }
 
 fn push_worktree(
