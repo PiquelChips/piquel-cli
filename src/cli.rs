@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{Config, SessionConfig, command, config, tmux};
+use crate::{Config, command, config, tmux};
 
 mod projects;
 mod sessions;
