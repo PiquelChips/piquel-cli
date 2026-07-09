@@ -3,11 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{
-    Config,
-    backend::{Backend, LocalBackend, SshBackend},
-    config, tmux,
-};
+use crate::{Config, command, config, tmux};
 
 mod projects;
 mod sessions;
@@ -22,10 +18,6 @@ pub struct Cli {
     /// custom path to configuration
     #[arg(long = "config", value_name = "path", global = true)]
     config_path: Option<PathBuf>,
-
-    /// configured machine to run commands on over SSH
-    #[arg(short = 'm', long = "machine", value_name = "name", global = true)]
-    machine: Option<String>,
 
     #[command(subcommand)]
     command: Commands,
@@ -85,22 +77,13 @@ pub enum ProjectCommands {
 /// Runtime state shared by CLI command handlers.
 pub struct State {
     config: Config,
-    backend: Box<dyn Backend>,
 }
 
 impl State {
     /// Creates CLI state from loaded configuration.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        Self::with_backend(config, Box::<LocalBackend>::default())
-    }
-
-    pub(crate) fn with_backend(config: Config, backend: Box<dyn Backend>) -> Self {
-        Self { config, backend }
-    }
-
-    pub(crate) fn backend(&self) -> &dyn Backend {
-        self.backend.as_ref()
+        Self { config }
     }
 
     /// Lists running tmux sessions.
@@ -109,7 +92,7 @@ impl State {
     ///
     /// Returns an error if tmux session listing fails.
     pub fn list(&self) -> Result<()> {
-        let mut sessions = tmux::list_sessions(self.backend())?;
+        let mut sessions = tmux::list_sessions()?;
         sessions.sort();
         sessions.dedup();
 
@@ -129,15 +112,13 @@ impl State {
 /// cannot be loaded, or the selected command fails.
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
-    let local_backend = LocalBackend;
 
     let config_path = cli
         .config_path
         .or_else(|| std::env::var_os(CONFIG_ENV_VAR).map(PathBuf::from))
         .map_or_else(
             || {
-                local_backend
-                    .home_dir()
+                command::home_dir()
                     .context("home directory not found")
                     .map(|home| home.join(".config/piquel/config.json"))
             },
@@ -145,15 +126,7 @@ pub fn run() -> Result<()> {
         )?;
 
     let mut config = config::read_config(&config_path)?;
-    let selected_machine = cli
-        .machine
-        .as_deref()
-        .map(|machine_name| {
-            config
-                .machine(machine_name)
-                .ok_or_else(|| anyhow::anyhow!("Machine \"{machine_name}\" is not configured"))
-        })
-        .transpose()?;
+    config.validate_and_normalize()?;
 
     if matches!(
         cli.command,
@@ -161,8 +134,6 @@ pub fn run() -> Result<()> {
             command: ProjectCommands::List
         }
     ) {
-        config.validate_and_normalize(&local_backend)?;
-
         let mut projects = config
             .projects
             .iter()
@@ -178,12 +149,7 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    let backend: Box<dyn Backend> = match selected_machine {
-        Some(machine) => Box::new(SshBackend::new(machine)),
-        None => Box::new(local_backend),
-    };
-    config.validate_and_normalize(backend.as_ref())?;
-    let state = State::with_backend(config, backend);
+    let state = State::new(config);
 
     match &cli.command {
         Commands::List => state.list(),
