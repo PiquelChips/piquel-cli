@@ -102,15 +102,6 @@ impl State {
 
         Ok(())
     }
-
-    pub(crate) fn open_session_with_template(
-        logical_name: &str,
-        root: &Path,
-        template: &SessionConfig,
-    ) -> Result<()> {
-        tmux::open_session(logical_name, root, template)?;
-        Ok(())
-    }
 }
 
 /// Parses CLI arguments, loads configuration, and dispatches the selected command.

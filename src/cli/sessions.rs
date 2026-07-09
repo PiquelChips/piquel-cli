@@ -82,7 +82,7 @@ impl State {
                 .into_owned(),
         };
 
-        Self::open_session_with_template(&tmux_name, &root, template)?;
+        tmux::open_session(&tmux_name, &root, template)?;
         Ok(())
     }
 

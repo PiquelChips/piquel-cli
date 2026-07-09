@@ -37,7 +37,7 @@ impl State {
 
         match worktree {
             Some(branch) => self.open_project_branch(&project, template, branch)?,
-            None => Self::open_session_with_template(&project.name, &project.path, template)?,
+            None => tmux::open_session(&project.name, &project.path, template)?,
         }
 
         Ok(())
@@ -75,7 +75,7 @@ impl State {
 
         let branches = Self::list_local_branches(&project.path)?;
         if branches.is_empty() {
-            Self::open_session_with_template(&project.name, &project.path, template)?;
+            tmux::open_session(&project.name, &project.path, template)?;
             return Ok(());
         }
 
@@ -125,7 +125,7 @@ impl State {
         };
 
         let tmux_name = format!("{}--{branch}", project.name);
-        Self::open_session_with_template(&tmux_name, &root, template)?;
+        tmux::open_session(&tmux_name, &root, template)?;
         Ok(())
     }
 
