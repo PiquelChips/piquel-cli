@@ -1,9 +1,9 @@
 //! Data types and helpers for the `piquelcli` command-line tool.
 
-/// Machine interaction backend abstraction.
-pub mod backend;
 /// Command-line parsing and top-level dispatch.
 pub mod cli;
+/// Local command execution helpers.
+pub mod command;
 /// JSON config loading.
 pub mod config;
 /// Interactive fuzzy selection helpers.
@@ -19,7 +19,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{backend::Backend, config::ConfigError};
+use crate::config::ConfigError;
 
 /// Commands to send to a tmux window after creating it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -107,13 +107,9 @@ impl ProjectConfig {
     /// # Errors
     ///
     /// Returns an error if the project name cannot be resolved.
-    pub fn resolved_path(
-        &self,
-        backend: &dyn Backend,
-        projects_dir: &Path,
-    ) -> Result<PathBuf, ConfigError> {
+    pub fn resolved_path(&self, projects_dir: &Path) -> Result<PathBuf, ConfigError> {
         match &self.path {
-            Some(path) => Ok(backend.expand_home(path)?),
+            Some(path) => Ok(command::expand_home(path)?),
             None => Ok(projects_dir.join(self.resolved_name()?)),
         }
     }
@@ -154,7 +150,7 @@ impl MachineConfig {
         Ok(())
     }
 
-    /// Returns the machine name used by the `--machine` flag.
+    /// Returns the configured machine name.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
@@ -198,7 +194,7 @@ impl Config {
     ///
     /// Returns an error if session templates, project names, project paths, or
     /// default-session references are invalid.
-    pub fn validate_and_normalize(&mut self, backend: &dyn Backend) -> Result<(), ConfigError> {
+    pub fn validate_and_normalize(&mut self) -> Result<(), ConfigError> {
         let mut machine_names = HashSet::new();
         for machine in &self.machines {
             machine.validate()?;
@@ -210,8 +206,8 @@ impl Config {
             }
         }
 
-        self.projects_dir = backend.expand_home(&self.projects_dir)?;
-        self.worktrees_dir = backend.expand_home(&self.worktrees_dir)?;
+        self.projects_dir = command::expand_home(&self.projects_dir)?;
+        self.worktrees_dir = command::expand_home(&self.worktrees_dir)?;
 
         for (name, session) in &self.sessions {
             session.validate(name)?;
@@ -235,7 +231,7 @@ impl Config {
                 )));
             }
 
-            let path = project.resolved_path(backend, &self.projects_dir)?;
+            let path = project.resolved_path(&self.projects_dir)?;
             project.name = Some(name);
             project.path = Some(path);
 
@@ -378,8 +374,6 @@ fn validate_machine_field(value: &str, field: &str) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::LocalBackend;
-
     fn window() -> WindowConfig {
         WindowConfig {
             name: None,
@@ -404,10 +398,6 @@ mod tests {
         }
     }
 
-    fn backend() -> LocalBackend {
-        LocalBackend
-    }
-
     #[test]
     fn expands_projects_dir_worktrees_dir_and_project_path() {
         let home = std::env::home_dir().expect("HOME should be set for tests");
@@ -420,7 +410,7 @@ mod tests {
         });
 
         config
-            .validate_and_normalize(&backend())
+            .validate_and_normalize()
             .expect("config should validate");
 
         assert_eq!(config.projects_dir, home.join("Projects"));
@@ -442,7 +432,7 @@ mod tests {
         .expect("config should parse");
 
         config
-            .validate_and_normalize(&backend())
+            .validate_and_normalize()
             .expect("config should validate");
 
         assert_eq!(config.worktrees_dir, home.join(".piquel/worktrees"));
@@ -526,7 +516,7 @@ mod tests {
             machines: vec![],
         };
 
-        assert!(config.validate_and_normalize(&backend()).is_err());
+        assert!(config.validate_and_normalize().is_err());
     }
 
     #[test]
@@ -542,7 +532,7 @@ mod tests {
             };
 
             assert!(
-                config.validate_and_normalize(&backend()).is_err(),
+                config.validate_and_normalize().is_err(),
                 "{name:?} should be rejected as a template name"
             );
         }
@@ -559,7 +549,7 @@ mod tests {
             machines: vec![],
         };
 
-        assert!(config.validate_and_normalize(&backend()).is_err());
+        assert!(config.validate_and_normalize().is_err());
     }
 
     #[test]
@@ -580,7 +570,7 @@ mod tests {
             },
         ];
 
-        assert!(config.validate_and_normalize(&backend()).is_err());
+        assert!(config.validate_and_normalize().is_err());
     }
 
     #[test]
@@ -593,7 +583,7 @@ mod tests {
             default_session: Some(ProjectSessionConfig::Template("missing".to_owned())),
         });
 
-        assert!(config.validate_and_normalize(&backend()).is_err());
+        assert!(config.validate_and_normalize().is_err());
     }
 
     #[test]
@@ -612,7 +602,7 @@ mod tests {
         });
 
         config
-            .validate_and_normalize(&backend())
+            .validate_and_normalize()
             .expect("config should validate");
         let project = config.project("repo").expect("project should resolve");
 
@@ -634,7 +624,7 @@ mod tests {
             })),
         });
 
-        assert!(config.validate_and_normalize(&backend()).is_err());
+        assert!(config.validate_and_normalize().is_err());
     }
 
     #[test]
@@ -650,7 +640,7 @@ mod tests {
             },
         );
 
-        assert!(config.validate_and_normalize(&backend()).is_err());
+        assert!(config.validate_and_normalize().is_err());
     }
 
     #[test]
@@ -665,7 +655,7 @@ mod tests {
         });
 
         config
-            .validate_and_normalize(&backend())
+            .validate_and_normalize()
             .expect("config should validate");
 
         assert_eq!(
@@ -686,7 +676,7 @@ mod tests {
         });
 
         config
-            .validate_and_normalize(&backend())
+            .validate_and_normalize()
             .expect("config should validate");
         let project = config.project("repo").expect("project should exist");
 
@@ -718,7 +708,7 @@ mod tests {
             default_session: Some(ProjectSessionConfig::Template("rust".to_owned())),
         });
         config
-            .validate_and_normalize(&backend())
+            .validate_and_normalize()
             .expect("config should validate");
         let project = config.project("repo").expect("project should exist");
 

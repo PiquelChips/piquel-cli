@@ -1,8 +1,6 @@
 use crate::{
     SessionConfig, WindowConfig,
-    backend::{
-        Backend, BackendError, CommandInput, CommandOutput, CommandRequest, CommandRequests,
-    },
+    command::{self, CommandError, CommandInput, CommandOutput, CommandRequest, CommandRequests},
 };
 use std::io;
 use std::path::Path;
@@ -15,9 +13,9 @@ pub enum TmuxError {
     /// The tmux process could not be spawned or observed.
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
-    /// A backend operation failed.
+    /// A command operation failed.
     #[error("{0}")]
-    Backend(BackendError),
+    CommandExec(CommandError),
     /// tmux exited unsuccessfully or returned an unexpected response.
     #[error("{0}")]
     Command(String),
@@ -29,11 +27,11 @@ pub enum TmuxError {
     InvalidSessionName(String),
 }
 
-impl From<BackendError> for TmuxError {
-    fn from(value: BackendError) -> Self {
+impl From<CommandError> for TmuxError {
+    fn from(value: CommandError) -> Self {
         match value {
-            BackendError::Io(err) => TmuxError::Io(err),
-            error => TmuxError::Backend(error),
+            CommandError::Io(err) => TmuxError::Io(err),
+            error => TmuxError::CommandExec(error),
         }
     }
 }
@@ -44,13 +42,13 @@ pub fn list_sessions_request() -> CommandRequest {
     tmux_request(["list-sessions", "-F", "#{session_name}"])
 }
 
-/// Lists running tmux sessions through `backend`.
+/// Lists running tmux sessions locally.
 ///
 /// # Errors
 ///
 /// Returns an error if tmux cannot be invoked or returns an unexpected failure.
-pub fn list_sessions(backend: &dyn Backend) -> Result<Vec<String>, TmuxError> {
-    let output = backend.output(list_sessions_request())?;
+pub fn list_sessions() -> Result<Vec<String>, TmuxError> {
+    let output = command::output(list_sessions_request())?;
     parse_list_sessions_output(&output)
 }
 
@@ -88,13 +86,13 @@ pub fn attach_request(session: &str) -> CommandRequest {
     tmux_request(["attach", "-t", session]).stdin(CommandInput::Inherit)
 }
 
-/// Attaches to an existing tmux session through `backend`.
+/// Attaches to an existing local tmux session.
 ///
 /// # Errors
 ///
 /// Returns an error if tmux cannot attach to the requested session.
-pub fn attach(backend: &dyn Backend, name: &str) -> Result<(), TmuxError> {
-    let status = backend.status(attach_request(name))?;
+pub fn attach(name: &str) -> Result<(), TmuxError> {
+    let status = command::status(attach_request(name))?;
     successful_status(status)
 }
 
@@ -144,7 +142,7 @@ pub fn send_keys_request(window_id: &str, command: &str) -> CommandRequest {
     tmux_request(["send-keys", "-t", window_id, command, "Enter"])
 }
 
-/// Returns command requests for all configured commands in a tmux window.
+/// Returns command requests for a tmux window's startup command.
 #[must_use]
 pub fn send_keys_requests(window_id: &str, window: &WindowConfig) -> CommandRequests {
     let mut requests = CommandRequests::new();
@@ -175,30 +173,26 @@ pub fn select_window_request(window_id: &str) -> CommandRequest {
 ///
 /// Returns an error if the session name is invalid or any tmux command fails.
 pub fn open_session(
-    backend: &dyn Backend,
     tmux_name: &str,
     root: &Path,
     template: &SessionConfig,
 ) -> Result<(), TmuxError> {
     let tmux_name = validated_session_name(tmux_name)?;
 
-    let sessions = list_sessions(backend)?;
+    let sessions = list_sessions()?;
     if sessions.contains(&tmux_name) {
-        attach(backend, &tmux_name)?;
+        attach(&tmux_name)?;
         return Ok(());
     }
 
-    let status = backend
-        .status(new_session_request(&tmux_name, root))
-        .map_err(|_| {
-            TmuxError::Command(format!("Failed to create session with name {tmux_name}"))
-        })?;
+    let status = command::status(new_session_request(&tmux_name, root)).map_err(|_| {
+        TmuxError::Command(format!("Failed to create session with name {tmux_name}"))
+    })?;
     successful_status(status).map_err(|_| {
         TmuxError::Command(format!("Failed to create session with name {tmux_name}"))
     })?;
 
-    let output = backend
-        .output(list_windows_request(&tmux_name))
+    let output = command::output(list_windows_request(&tmux_name))
         .map_err(|e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")))?;
     let bootstrap_window = successful_output(&output)
         .map_err(|e| TmuxError::Command(format!("Failed to list tmux windows with error: {e}")))?;
@@ -206,28 +200,26 @@ pub fn open_session(
     let mut first_window = None;
 
     for (i, window) in template.windows.iter().enumerate() {
-        let window_id = create_window(backend, &tmux_name, root, window).map_err(|e| {
+        let window_id = create_window(&tmux_name, root, window).map_err(|e| {
             TmuxError::Command(format!("Failed to create window {} with error: {e}", i + 1))
         })?;
 
         first_window.get_or_insert(window_id);
     }
 
-    let status = backend
-        .status(kill_window_request(&bootstrap_window))
+    let status = command::status(kill_window_request(&bootstrap_window))
         .map_err(|_| TmuxError::Command("Failed to kill first window".to_owned()))?;
     successful_status(status)
         .map_err(|_| TmuxError::Command("Failed to kill first window".to_owned()))?;
 
     if let Some(first_window) = first_window {
-        let status = backend
-            .status(select_window_request(&first_window))
+        let status = command::status(select_window_request(&first_window))
             .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
         successful_status(status)
             .map_err(|_| TmuxError::Command("Failed to select first window".to_owned()))?;
     }
 
-    attach(backend, &tmux_name).map_err(|e| {
+    attach(&tmux_name).map_err(|e| {
         TmuxError::Command(format!(
             "Failed to attach to session {tmux_name} with error: {e}"
         ))
@@ -348,29 +340,26 @@ fn tmux_request<'a>(args: impl IntoIterator<Item = &'a str>) -> CommandRequest {
 }
 
 fn create_window(
-    backend: &dyn Backend,
     session_name: &str,
     start_dir: &Path,
     window: &WindowConfig,
 ) -> Result<String, TmuxError> {
-    let output = backend
-        .output(new_window_request(session_name, start_dir, window))
+    let output = command::output(new_window_request(session_name, start_dir, window))
         .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
     let window_id = successful_output(&output)
         .map_err(|e| TmuxError::Command(format!("Failed to create window with error: {e}")))?;
     let window_id = window_id.trim_matches('\n').to_owned();
 
-    for command in &window.commands {
-        let output = backend
-            .output(send_keys_request(&window_id, command))
-            .map_err(|e| {
+    for startup_command in &window.commands {
+        let output =
+            command::output(send_keys_request(&window_id, startup_command)).map_err(|e| {
                 TmuxError::Command(format!(
-                    "Failed to execute command \"{command}\" with error: {e}"
+                    "Failed to execute command \"{startup_command}\" with error: {e}"
                 ))
             })?;
         successful_output(&output).map_err(|e| {
             TmuxError::Command(format!(
-                "Failed to execute command \"{command}\" with error: {e}"
+                "Failed to execute command \"{startup_command}\" with error: {e}"
             ))
         })?;
     }
@@ -391,7 +380,6 @@ fn stdout_text(output: &CommandOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::VecDeque, sync::Mutex};
 
     #[test]
     fn sanitizes_tmux_session_names() {
@@ -544,156 +532,6 @@ mod tests {
             .expect_err("failed status should be returned");
 
         assert!(matches!(err, TmuxError::Command(_)));
-    }
-
-    #[test]
-    fn open_session_attaches_when_session_already_exists() {
-        let backend = RecordingBackend::new(vec![
-            command_output(0, b"alpha\nbeta\n", b""),
-            command_output(0, b"", b""),
-        ]);
-        let template = SessionConfig {
-            windows: vec![WindowConfig {
-                name: None,
-                commands: vec!["should not run".to_owned()],
-            }],
-        };
-
-        open_session(&backend, "alpha", Path::new("/repo"), &template)
-            .expect("existing session should attach");
-
-        assert_eq!(backend.output_requests(), vec![list_sessions_request()]);
-        assert_eq!(backend.status_requests(), vec![attach_request("alpha")]);
-    }
-
-    #[test]
-    fn open_session_creates_windows_selects_first_and_attaches() {
-        let backend = RecordingBackend::new(vec![
-            command_output(0, b"", b""),
-            command_output(0, b"@0\n", b""),
-            command_output(0, b"@1\n", b""),
-            command_output(0, b"", b""),
-            command_output(0, b"@2\n", b""),
-            command_output(0, b"", b""),
-            command_output(0, b"", b""),
-        ]);
-        let template = SessionConfig {
-            windows: vec![
-                WindowConfig {
-                    name: Some("editor".to_owned()),
-                    commands: vec!["vim .".to_owned()],
-                },
-                WindowConfig {
-                    name: None,
-                    commands: vec!["cargo test".to_owned()],
-                },
-            ],
-        };
-
-        open_session(&backend, "feature/foo", Path::new("/repo"), &template)
-            .expect("new session should be created");
-
-        assert_eq!(
-            backend.output_requests(),
-            vec![
-                list_sessions_request(),
-                list_windows_request("feature_foo"),
-                new_window_request("feature_foo", Path::new("/repo"), &template.windows[0]),
-                send_keys_request("@1", "vim ."),
-                new_window_request("feature_foo", Path::new("/repo"), &template.windows[1]),
-                send_keys_request("@2", "cargo test"),
-            ]
-        );
-        assert_eq!(
-            backend.status_requests(),
-            vec![
-                new_session_request("feature_foo", Path::new("/repo")),
-                kill_window_request("@0"),
-                select_window_request("@1"),
-                attach_request("feature_foo"),
-            ]
-        );
-    }
-
-    struct RecordingBackend {
-        output_responses: Mutex<VecDeque<CommandOutput>>,
-        output_requests: Mutex<Vec<CommandRequest>>,
-        status_requests: Mutex<Vec<CommandRequest>>,
-    }
-
-    impl RecordingBackend {
-        fn new(output_responses: Vec<CommandOutput>) -> Self {
-            Self {
-                output_responses: Mutex::new(output_responses.into()),
-                output_requests: Mutex::new(Vec::new()),
-                status_requests: Mutex::new(Vec::new()),
-            }
-        }
-
-        fn output_requests(&self) -> Vec<CommandRequest> {
-            self.output_requests
-                .lock()
-                .expect("requests lock should not be poisoned")
-                .clone()
-        }
-
-        fn status_requests(&self) -> Vec<CommandRequest> {
-            self.status_requests
-                .lock()
-                .expect("requests lock should not be poisoned")
-                .clone()
-        }
-    }
-
-    impl Backend for RecordingBackend {
-        fn output(&self, request: CommandRequest) -> Result<CommandOutput, BackendError> {
-            self.output_requests
-                .lock()
-                .expect("requests lock should not be poisoned")
-                .push(request);
-            Ok(self
-                .output_responses
-                .lock()
-                .expect("responses lock should not be poisoned")
-                .pop_front()
-                .expect("test output response should exist"))
-        }
-
-        fn status(&self, request: CommandRequest) -> Result<ExitStatus, BackendError> {
-            self.status_requests
-                .lock()
-                .expect("requests lock should not be poisoned")
-                .push(request);
-            Ok(status(0))
-        }
-
-        fn home_dir(&self) -> Result<std::path::PathBuf, BackendError> {
-            Ok(std::path::PathBuf::from("/home/test"))
-        }
-
-        fn current_dir(&self) -> Result<std::path::PathBuf, BackendError> {
-            Ok(std::path::PathBuf::from("/repo"))
-        }
-
-        fn path_exists(&self, _path: &Path) -> Result<bool, BackendError> {
-            Ok(true)
-        }
-
-        fn path_is_dir(&self, _path: &Path) -> Result<bool, BackendError> {
-            Ok(true)
-        }
-
-        fn create_dir_all(&self, _path: &Path) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        fn canonicalize(&self, path: &Path) -> Result<std::path::PathBuf, BackendError> {
-            Ok(path.to_path_buf())
-        }
-
-        fn validate_program(&self, _program: &std::ffi::OsStr) -> Result<(), BackendError> {
-            Ok(())
-        }
     }
 
     fn command_output(code: i32, stdout: &[u8], stderr: &[u8]) -> CommandOutput {

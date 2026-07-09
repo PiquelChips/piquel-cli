@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{ResolvedProject, SessionConfig, cli::State, git, tmux};
+use crate::{ResolvedProject, SessionConfig, cli::State, command, git, tmux};
 
 impl State {
     /// Loads a configured project, optionally opening a branch worktree.
@@ -33,11 +33,11 @@ impl State {
                 anyhow!("Session template \"{template_name}\" is not configured")
             })?;
 
-        self.ensure_project_path(&project)?;
+        Self::ensure_project_path(&project)?;
 
         match worktree {
             Some(branch) => self.open_project_branch(&project, template, branch)?,
-            None => tmux::open_session(self.backend(), &project.name, &project.path, template)?,
+            None => Self::open_session_with_template(&project.name, &project.path, template)?,
         }
 
         Ok(())
@@ -71,11 +71,11 @@ impl State {
                 anyhow!("Session template \"{template_name}\" is not configured")
             })?;
 
-        self.ensure_project_path(&project)?;
+        Self::ensure_project_path(&project)?;
 
-        let branches = self.list_local_branches(&project.path)?;
+        let branches = Self::list_local_branches(&project.path)?;
         if branches.is_empty() {
-            tmux::open_session(self.backend(), &project.name, &project.path, template)?;
+            Self::open_session_with_template(&project.name, &project.path, template)?;
             return Ok(());
         }
 
@@ -93,7 +93,7 @@ impl State {
         template: &SessionConfig,
         branch: &str,
     ) -> Result<()> {
-        let branches = self.list_local_branches(&project.path)?;
+        let branches = Self::list_local_branches(&project.path)?;
         if !branches.iter().any(|candidate| candidate == branch) {
             bail!(
                 "Branch \"{}\" is not a local branch for project \"{}\"",
@@ -102,56 +102,49 @@ impl State {
             );
         }
 
-        let worktrees = self.list_worktrees(&project.path)?;
+        let worktrees = Self::list_worktrees(&project.path)?;
         let root = if let Some(worktree) = git::worktree_for_branch(&worktrees, branch) {
             worktree.path
         } else {
             let worktree_path = git::managed_worktree_path_for_branch(
-                self.backend(),
                 &self.config.worktrees_dir,
                 &project.name,
                 branch,
                 &worktrees,
             )?;
             if let Some(parent) = worktree_path.parent() {
-                self.backend().create_dir_all(parent).with_context(|| {
+                std::fs::create_dir_all(parent).with_context(|| {
                     format!(
                         "Failed to create managed worktree directory {}",
                         parent.display()
                     )
                 })?;
             }
-            self.create_worktree(&project.path, &worktree_path, branch)?;
+            Self::create_worktree(&project.path, &worktree_path, branch)?;
             worktree_path
         };
 
         let tmux_name = format!("{}--{branch}", project.name);
-        tmux::open_session(self.backend(), &tmux_name, &root, template)?;
+        Self::open_session_with_template(&tmux_name, &root, template)?;
         Ok(())
     }
 
-    fn list_local_branches(&self, project_path: &std::path::Path) -> Result<Vec<String>> {
-        let output = self.backend().output(git::list_local_branches_request(
-            self.backend(),
-            project_path,
-        )?)?;
+    fn list_local_branches(project_path: &std::path::Path) -> Result<Vec<String>> {
+        let output = command::output(git::list_local_branches_request(project_path)?)?;
         Ok(git::parse_local_branches_output(&output)?)
     }
 
-    fn list_worktrees(&self, project_path: &std::path::Path) -> Result<Vec<git::Worktree>> {
-        let output = self
-            .backend()
-            .output(git::list_worktrees_request(self.backend(), project_path)?)?;
+    fn list_worktrees(project_path: &std::path::Path) -> Result<Vec<git::Worktree>> {
+        let output = command::output(git::list_worktrees_request(project_path)?)?;
         Ok(git::parse_worktrees_output(&output)?)
     }
 
     fn create_worktree(
-        &self,
         project_path: &std::path::Path,
         worktree_path: &std::path::Path,
         branch: &str,
     ) -> Result<()> {
-        let output = self.backend().output(git::create_worktree_request(
+        let output = command::output(git::create_worktree_request(
             project_path,
             worktree_path,
             branch,
@@ -159,9 +152,9 @@ impl State {
         Ok(git::parse_create_worktree_output(&output)?)
     }
 
-    fn ensure_project_path(&self, project: &ResolvedProject) -> Result<()> {
-        if self.backend().path_exists(&project.path)? {
-            if !self.backend().path_is_dir(&project.path)? {
+    fn ensure_project_path(project: &ResolvedProject) -> Result<()> {
+        if project.path.exists() {
+            if !project.path.is_dir() {
                 bail!(
                     "Project \"{}\" path {} is not a directory",
                     project.name,
@@ -179,7 +172,7 @@ impl State {
             );
         }
 
-        clone_project(self.backend(), project)
+        clone_project(project)
     }
 }
 
@@ -203,9 +196,9 @@ fn prompt_clone_project(project: &ResolvedProject) -> Result<bool> {
     ))
 }
 
-fn clone_project(backend: &dyn crate::backend::Backend, project: &ResolvedProject) -> Result<()> {
+fn clone_project(project: &ResolvedProject) -> Result<()> {
     if let Some(parent) = project.path.parent() {
-        backend.create_dir_all(parent).with_context(|| {
+        std::fs::create_dir_all(parent).with_context(|| {
             format!(
                 "Failed to create project parent directory {}",
                 parent.display()
@@ -213,7 +206,7 @@ fn clone_project(backend: &dyn crate::backend::Backend, project: &ResolvedProjec
         })?;
     }
 
-    let status = backend.status(git::clone_repository_request(
+    let status = command::status(git::clone_repository_request(
         &project.repository,
         &project.path,
     ))?;

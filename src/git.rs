@@ -4,7 +4,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::backend::{Backend, BackendError, CommandOutput, CommandRequest};
+use crate::command::{CommandError, CommandOutput, CommandRequest};
 
 /// A git worktree discovered from `git worktree list --porcelain`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,9 +21,9 @@ pub enum GitError {
     /// The git process could not be spawned or observed.
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
-    /// A backend operation failed.
+    /// A local command operation failed.
     #[error("{0}")]
-    Backend(BackendError),
+    CommandExec(#[from] CommandError),
     /// git exited unsuccessfully.
     #[error("{0}")]
     Command(String),
@@ -54,25 +54,13 @@ pub enum GitError {
     Parse(String),
 }
 
-impl From<BackendError> for GitError {
-    fn from(value: BackendError) -> Self {
-        match value {
-            BackendError::Io(err) => GitError::Io(err),
-            error => GitError::Backend(error),
-        }
-    }
-}
-
 /// Returns the command request for listing local branch names.
 ///
 /// # Errors
 ///
 /// Returns an error if `project_path` does not exist.
-pub fn list_local_branches_request(
-    backend: &dyn Backend,
-    project_path: &Path,
-) -> Result<CommandRequest, GitError> {
-    if !backend.path_exists(project_path)? {
+pub fn list_local_branches_request(project_path: &Path) -> Result<CommandRequest, GitError> {
+    if !project_path.exists() {
         return Err(GitError::MissingProjectPath(project_path.to_owned()));
     }
 
@@ -136,11 +124,8 @@ pub fn parse_create_worktree_output(output: &CommandOutput) -> Result<(), GitErr
 /// # Errors
 ///
 /// Returns an error if `project_path` does not exist.
-pub fn list_worktrees_request(
-    backend: &dyn Backend,
-    project_path: &Path,
-) -> Result<CommandRequest, GitError> {
-    if !backend.path_exists(project_path)? {
+pub fn list_worktrees_request(project_path: &Path) -> Result<CommandRequest, GitError> {
+    if !project_path.exists() {
         return Err(GitError::MissingProjectPath(project_path.to_owned()));
     }
 
@@ -264,11 +249,7 @@ fn push_worktree(
 
 /// Returns whether `worktrees` includes a branch worktree beyond `project_path`.
 #[must_use]
-pub fn has_additional_worktrees(
-    backend: &dyn Backend,
-    project_path: &Path,
-    worktrees: &[Worktree],
-) -> bool {
+pub fn has_additional_worktrees(project_path: &Path, worktrees: &[Worktree]) -> bool {
     let branch_worktrees = worktrees
         .iter()
         .filter(|worktree| worktree.branch.is_some())
@@ -277,15 +258,15 @@ pub fn has_additional_worktrees(
     branch_worktrees.len() > 1
         || branch_worktrees
             .iter()
-            .any(|worktree| !same_path(backend, &worktree.path, project_path))
+            .any(|worktree| !same_path(&worktree.path, project_path))
 }
 
-fn same_path(backend: &dyn Backend, left: &Path, right: &Path) -> bool {
+fn same_path(left: &Path, right: &Path) -> bool {
     if left == right {
         return true;
     }
 
-    match (backend.canonicalize(left), backend.canonicalize(right)) {
+    match (left.canonicalize(), right.canonicalize()) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -327,7 +308,6 @@ pub fn managed_worktree_path(
 /// Returns an error if the branch path cannot be generated or if an existing
 /// path is not already registered as `branch`'s worktree.
 pub fn managed_worktree_path_for_branch(
-    backend: &dyn Backend,
     worktrees_dir: &Path,
     project_name: &str,
     branch: &str,
@@ -335,9 +315,9 @@ pub fn managed_worktree_path_for_branch(
 ) -> Result<PathBuf, GitError> {
     let path = managed_worktree_path(worktrees_dir, project_name, branch)?;
 
-    if backend.path_exists(&path)?
+    if path.exists()
         && !worktrees.iter().any(|worktree| {
-            same_path(backend, &worktree.path, &path) && worktree.branch.as_deref() == Some(branch)
+            same_path(&worktree.path, &path) && worktree.branch.as_deref() == Some(branch)
         })
     {
         return Err(GitError::ManagedWorktreePathConflict {
@@ -378,7 +358,6 @@ fn sanitized_branch_segment(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::LocalBackend;
 
     #[test]
     fn parses_multiple_worktrees_and_branch_names_with_slashes() {
@@ -585,15 +564,14 @@ main
 
     #[test]
     fn request_builders_reject_missing_project_paths() {
-        let backend = LocalBackend;
         let missing = Path::new("/definitely/missing/piquel/project");
 
         assert!(matches!(
-            list_local_branches_request(&backend, missing),
+            list_local_branches_request(missing),
             Err(GitError::MissingProjectPath(_))
         ));
         assert!(matches!(
-            list_worktrees_request(&backend, missing),
+            list_worktrees_request(missing),
             Err(GitError::MissingProjectPath(_))
         ));
     }
@@ -648,9 +626,8 @@ main
         let existing = root.join("alpha/feature_foo");
         std::fs::create_dir_all(&existing).expect("test directory should be created");
 
-        let err =
-            managed_worktree_path_for_branch(&LocalBackend, &root, "alpha", "feature/foo", &[])
-                .expect_err("existing unregistered path should be rejected");
+        let err = managed_worktree_path_for_branch(&root, "alpha", "feature/foo", &[])
+            .expect_err("existing unregistered path should be rejected");
 
         assert!(matches!(err, GitError::ManagedWorktreePathConflict { .. }));
 
@@ -670,7 +647,6 @@ main
         std::fs::create_dir_all(&existing).expect("test directory should be created");
 
         let path = managed_worktree_path_for_branch(
-            &LocalBackend,
             &root,
             "alpha",
             "feature/foo",
@@ -724,11 +700,7 @@ main
             worktree("/repo-detached", None),
         ];
 
-        assert!(!has_additional_worktrees(
-            &LocalBackend,
-            project_path,
-            &worktrees
-        ));
+        assert!(!has_additional_worktrees(project_path, &worktrees));
     }
 
     #[test]
@@ -736,7 +708,6 @@ main
         let project_path = Path::new("/repo");
 
         assert!(has_additional_worktrees(
-            &LocalBackend,
             project_path,
             &[
                 worktree("/repo", Some("main")),
@@ -744,7 +715,6 @@ main
             ]
         ));
         assert!(has_additional_worktrees(
-            &LocalBackend,
             project_path,
             &[worktree("/repo-feature", Some("feature/foo"))]
         ));
