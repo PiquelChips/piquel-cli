@@ -140,26 +140,6 @@ pub fn run() -> Result<()> {
     let mut config = config::read_config(&config_path)?;
     config.validate_and_normalize()?;
 
-    if matches!(
-        cli.command,
-        Commands::Project {
-            command: ProjectCommands::List
-        }
-    ) {
-        let mut projects = config
-            .projects
-            .iter()
-            .filter_map(|project| project.resolved_name().ok())
-            .collect::<Vec<_>>();
-
-        projects.sort();
-        projects.dedup();
-
-        for project in projects {
-            println!("{project}");
-        }
-        return Ok(());
-    }
 
     let state = State::new(config);
 
@@ -168,7 +148,7 @@ pub fn run() -> Result<()> {
         Commands::List => state.list(),
         Commands::Pick { project, session } => state.pick(project.as_deref(), session.as_deref()),
         Commands::Project { command } => match command {
-            ProjectCommands::List => Ok(()), // should have been run before state creation
+            ProjectCommands::List => Ok(state.list_projects()),
             ProjectCommands::Load {
                 project,
                 session,

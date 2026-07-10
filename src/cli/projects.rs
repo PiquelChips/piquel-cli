@@ -5,6 +5,23 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::{ResolvedProject, SessionConfig, cli::State, command, git, tmux};
 
 impl State {
+    /// Lists all the configured projects
+    pub fn list_projects(&self) {
+        let mut projects = self
+            .config
+            .projects
+            .iter()
+            .filter_map(|project| project.resolved_name().ok())
+            .collect::<Vec<_>>();
+
+        projects.sort();
+        projects.dedup();
+
+        for project in projects {
+            println!("{project}");
+        }
+    }
+
     /// Loads a configured project, optionally opening a branch worktree.
     ///
     /// # Errors
