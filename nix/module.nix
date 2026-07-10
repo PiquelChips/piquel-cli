@@ -134,6 +134,12 @@ in
               description = "Default directory for managed project worktrees.";
             };
 
+            mounts_dir = mkOption {
+              type = types.str;
+              default = "~/.piquel/mounts";
+              description = "Local directory for managed SSHFS workspace mounts.";
+            };
+
             default_session = mkOption {
               type = types.str;
               default = "default";
