@@ -41,11 +41,22 @@ piquel --config examples/test-config.json project list
 Commands:
 
 ```text
+piquel completions <shell>
 piquel list
 piquel pick [project] [--session <template>]
 piquel project list
 piquel project load <project> [--session <template>] [--worktree <branch>]
 piquel session [path] [--session <template>] [--name <tmux-name>]
+```
+
+`piquel completions <shell>` prints shell completions for `bash`, `fish`, or
+`zsh`. Nix installs these completions automatically. For manual installs,
+write the generated completion to the location your shell reads:
+
+```sh
+piquel completions zsh > ~/.zfunc/_piquel
+piquel completions bash > ~/.local/share/bash-completion/completions/piquel
+piquel completions fish > ~/.config/fish/completions/piquel.fish
 ```
 
 `piquel list` prints running tmux sessions. `piquel pick` combines running

@@ -395,6 +395,24 @@ fn config_for_session_commands(temp: &TestDir, commands: &[&str]) -> PathBuf {
 }
 
 #[test]
+fn completions_print_without_config() {
+    let output = run(["completions", "bash"]);
+
+    assert!(
+        output.status.success(),
+        "expected success, got status {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("piquel"));
+    assert!(stdout.contains("project"));
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[test]
 fn project_list_prints_sorted_configured_projects() {
     let temp = TestDir::new();
     let config = config_with_projects(&temp);
