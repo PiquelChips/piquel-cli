@@ -8,14 +8,15 @@ let
   cfg = config.programs.piquelcli;
   settingsFormat = pkgs.formats.json { };
   configFile = settingsFormat.generate "piquel-cli.json" cfg.settings;
+  basePiquel = pkgs.callPackage ./pkg.nix { };
 
   wrappedPiquel =
-    pkgs.runCommand "piquelcli-wrapped"
-      {
-        nativeBuildInputs = [ pkgs.makeWrapper ];
-      }
-      ''
-        makeWrapper ${pkgs.callPackage ./pkg.nix { }}/bin/piquel $out/bin/piquel \
+    pkgs.symlinkJoin {
+      name = "piquelcli-wrapped";
+      paths = [ basePiquel ];
+      nativeBuildInputs = [ pkgs.makeWrapper ];
+      postBuild = ''
+        wrapProgram $out/bin/piquel \
             --set PIQUEL_CONFIG ${configFile} \
             --prefix PATH : ${
               lib.makeBinPath [
@@ -26,6 +27,7 @@ let
               ]
             }
       '';
+    };
 
   piquelcli = wrappedPiquel;
 in

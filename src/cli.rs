@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -26,6 +27,11 @@ pub struct Cli {
 /// Top-level CLI commands.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for.
+        shell: Shell,
+    },
     /// List running tmux sessions
     List,
     /// Interactively pick a running tmux session or configured project
@@ -113,6 +119,12 @@ impl State {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    if let Commands::Completions { shell } = &cli.command {
+        let mut command = Cli::command();
+        generate(*shell, &mut command, "piquel", &mut std::io::stdout());
+        return Ok(());
+    }
+
     let config_path = cli
         .config_path
         .or_else(|| std::env::var_os(CONFIG_ENV_VAR).map(PathBuf::from))
@@ -152,6 +164,7 @@ pub fn run() -> Result<()> {
     let state = State::new(config);
 
     match &cli.command {
+        Commands::Completions { .. } => Ok(()), // handled before config loading
         Commands::List => state.list(),
         Commands::Pick { project, session } => state.pick(project.as_deref(), session.as_deref()),
         Commands::Project { command } => match command {
