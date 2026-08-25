@@ -32,6 +32,7 @@
                             clippy
                             fzf
                             git
+                            sshfs
                             tmux
                         ];
                         buildPhase = ''

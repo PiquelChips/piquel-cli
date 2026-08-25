@@ -4,8 +4,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::{Config, command, config, tmux};
+use crate::{Config, command, config, mount, tmux};
 
+mod mounts;
 mod projects;
 mod sessions;
 
@@ -47,6 +48,43 @@ pub enum Commands {
         /// Project subcommand to run.
         #[command(subcommand)]
         command: ProjectCommands,
+    },
+    /// Mount a remote project or existing worktree locally with SSHFS
+    Mount {
+        /// Configured machine name.
+        machine: String,
+        /// Project name to mount. Omit to pick interactively.
+        project: Option<String>,
+        /// Existing branch worktree to mount.
+        #[arg(short = 't', long = "worktree")]
+        worktree: Option<String>,
+        /// Unmount an existing managed mount first, then mount again.
+        #[arg(long)]
+        repair: bool,
+    },
+    /// List managed SSHFS workspace mounts
+    Mounts {
+        /// Configured machine name.
+        machine: String,
+    },
+    /// Unmount managed SSHFS workspace mounts
+    Unmount {
+        /// Configured machine name.
+        machine: String,
+        /// Project name to unmount. Omit to pick interactively.
+        project: Option<String>,
+        /// Existing branch worktree to unmount.
+        #[arg(short = 't', long = "worktree")]
+        worktree: Option<String>,
+        /// Unmount all known mounts for the configured machine.
+        #[arg(long)]
+        all: bool,
+        /// Remove stale state records without unmounting.
+        #[arg(long)]
+        stale: bool,
+        /// Repair matching mount state by unmounting before removal.
+        #[arg(long)]
+        repair: bool,
     },
     /// Open an arbitrary directory with a session template
     #[command(alias = "s")]
@@ -138,27 +176,17 @@ pub fn run() -> Result<()> {
         )?;
 
     let mut config = config::read_config(&config_path)?;
-    config.validate_and_normalize()?;
 
-    if matches!(
-        cli.command,
-        Commands::Project {
-            command: ProjectCommands::List
-        }
-    ) {
-        let mut projects = config
-            .projects
-            .iter()
-            .filter_map(|project| project.resolved_name().ok())
-            .collect::<Vec<_>>();
-
-        projects.sort();
-        projects.dedup();
-
-        for project in projects {
-            println!("{project}");
-        }
-        return Ok(());
+    if let Commands::Mount { machine, .. } = &cli.command {
+        let machine = config
+            .machine(machine)
+            .ok_or_else(|| anyhow::anyhow!("Machine \"{machine}\" is not configured"))?;
+        config.validate_and_normalize_for_mount(&mount::SshTarget {
+            username: machine.username().to_owned(),
+            host: machine.address().to_owned(),
+        })?;
+    } else {
+        config.validate_and_normalize()?;
     }
 
     let state = State::new(config);
@@ -168,13 +196,38 @@ pub fn run() -> Result<()> {
         Commands::List => state.list(),
         Commands::Pick { project, session } => state.pick(project.as_deref(), session.as_deref()),
         Commands::Project { command } => match command {
-            ProjectCommands::List => Ok(()), // should have been run before state creation
+            ProjectCommands::List => {
+                state.list_projects();
+                Ok(())
+            }
             ProjectCommands::Load {
                 project,
                 session,
                 worktree,
             } => state.load_project(project, session.as_deref(), worktree.as_deref()),
         },
+        Commands::Mount {
+            machine,
+            project,
+            worktree,
+            repair,
+        } => state.mount(machine, project.as_deref(), worktree.as_deref(), *repair),
+        Commands::Mounts { machine } => state.mounts(machine),
+        Commands::Unmount {
+            machine,
+            project,
+            worktree,
+            all,
+            stale,
+            repair,
+        } => state.unmount(
+            machine,
+            project.as_deref(),
+            worktree.as_deref(),
+            *all,
+            *stale,
+            *repair,
+        ),
         Commands::Session {
             path,
             session,

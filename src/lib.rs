@@ -10,6 +10,8 @@ pub mod config;
 pub mod fzf;
 /// Git worktree discovery helpers.
 pub mod git;
+/// SSHFS managed workspace mounts.
+pub mod mount;
 /// Integration helpers for invoking tmux.
 pub mod tmux;
 
@@ -108,8 +110,16 @@ impl ProjectConfig {
     ///
     /// Returns an error if the project name cannot be resolved.
     pub fn resolved_path(&self, projects_dir: &Path) -> Result<PathBuf, ConfigError> {
+        self.resolved_path_with(projects_dir, &local_expand_home)
+    }
+
+    fn resolved_path_with(
+        &self,
+        projects_dir: &Path,
+        expand_home: &dyn Fn(&Path) -> Result<PathBuf, ConfigError>,
+    ) -> Result<PathBuf, ConfigError> {
         match &self.path {
-            Some(path) => Ok(command::expand_home(path)?),
+            Some(path) => expand_home(path),
             None => Ok(projects_dir.join(self.resolved_name()?)),
         }
     }
@@ -177,6 +187,8 @@ pub struct Config {
     projects_dir: PathBuf,
     #[serde(default = "default_worktrees_dir")]
     worktrees_dir: PathBuf,
+    #[serde(default = "default_mounts_dir")]
+    mounts_dir: PathBuf,
     #[serde(default = "default_default_session")]
     default_session: String,
     #[serde(default)]
@@ -195,6 +207,32 @@ impl Config {
     /// Returns an error if session templates, project names, project paths, or
     /// default-session references are invalid.
     pub fn validate_and_normalize(&mut self) -> Result<(), ConfigError> {
+        self.validate_and_normalize_with(&local_expand_home, &local_expand_home)
+    }
+
+    /// Validates config semantics for remote SSHFS mount commands.
+    ///
+    /// Project paths are expanded against the SSH target. Local mount paths are
+    /// expanded against the current machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if config validation fails or the remote home
+    /// directory cannot be determined.
+    pub fn validate_and_normalize_for_mount(
+        &mut self,
+        target: &mount::SshTarget,
+    ) -> Result<(), ConfigError> {
+        let remote_home = mount::remote_home_dir(target)?;
+        let remote_expand_home = |path: &Path| Ok(expand_home_with(path, &remote_home));
+        self.validate_and_normalize_with(&remote_expand_home, &local_expand_home)
+    }
+
+    fn validate_and_normalize_with(
+        &mut self,
+        project_expand_home: &dyn Fn(&Path) -> Result<PathBuf, ConfigError>,
+        local_expand_home: &dyn Fn(&Path) -> Result<PathBuf, ConfigError>,
+    ) -> Result<(), ConfigError> {
         let mut machine_names = HashSet::new();
         for machine in &self.machines {
             machine.validate()?;
@@ -206,8 +244,9 @@ impl Config {
             }
         }
 
-        self.projects_dir = command::expand_home(&self.projects_dir)?;
-        self.worktrees_dir = command::expand_home(&self.worktrees_dir)?;
+        self.projects_dir = project_expand_home(&self.projects_dir)?;
+        self.worktrees_dir = project_expand_home(&self.worktrees_dir)?;
+        self.mounts_dir = local_expand_home(&self.mounts_dir)?;
 
         for (name, session) in &self.sessions {
             session.validate(name)?;
@@ -231,7 +270,7 @@ impl Config {
                 )));
             }
 
-            let path = project.resolved_path(&self.projects_dir)?;
+            let path = project.resolved_path_with(&self.projects_dir, project_expand_home)?;
             project.name = Some(name);
             project.path = Some(path);
 
@@ -259,6 +298,12 @@ impl Config {
         }
 
         Ok(())
+    }
+
+    /// Returns the normalized local managed mounts directory.
+    #[must_use]
+    pub fn mounts_dir(&self) -> &Path {
+        &self.mounts_dir
     }
 
     /// Returns the named global session template.
@@ -331,8 +376,24 @@ fn default_worktrees_dir() -> PathBuf {
     PathBuf::from("~/.piquel/worktrees")
 }
 
+fn default_mounts_dir() -> PathBuf {
+    PathBuf::from("~/.piquel/mounts")
+}
+
 fn default_default_session() -> String {
     "default".to_owned()
+}
+
+fn local_expand_home(path: &Path) -> Result<PathBuf, ConfigError> {
+    Ok(command::expand_home(path)?)
+}
+
+fn expand_home_with(path: &Path, home: &Path) -> PathBuf {
+    if let Ok(stripped) = path.strip_prefix("~") {
+        return home.join(stripped);
+    }
+
+    path.to_path_buf()
 }
 
 fn repository_basename(repository: &str) -> Result<String, ConfigError> {
@@ -391,6 +452,7 @@ mod tests {
         Config {
             projects_dir: PathBuf::from("~/Projects"),
             worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
+            mounts_dir: PathBuf::from("~/.piquel/mounts"),
             default_session: "default".to_owned(),
             sessions: HashMap::from([("default".to_owned(), session())]),
             projects: vec![],
@@ -415,6 +477,7 @@ mod tests {
 
         assert_eq!(config.projects_dir, home.join("Projects"));
         assert_eq!(config.worktrees_dir, home.join(".piquel/worktrees"));
+        assert_eq!(config.mounts_dir, home.join(".piquel/mounts"));
         assert_eq!(config.projects[0].path, Some(home.join("src/repo")));
     }
 
@@ -436,6 +499,7 @@ mod tests {
             .expect("config should validate");
 
         assert_eq!(config.worktrees_dir, home.join(".piquel/worktrees"));
+        assert_eq!(config.mounts_dir, home.join(".piquel/mounts"));
     }
 
     #[test]
@@ -510,6 +574,7 @@ mod tests {
         let mut config = Config {
             projects_dir: PathBuf::from("~/Projects"),
             worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
+            mounts_dir: PathBuf::from("~/.piquel/mounts"),
             default_session: "missing".to_owned(),
             sessions: HashMap::from([("default".to_owned(), session())]),
             projects: vec![],
@@ -525,6 +590,7 @@ mod tests {
             let mut config = Config {
                 projects_dir: PathBuf::from("~/Projects"),
                 worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
+                mounts_dir: PathBuf::from("~/.piquel/mounts"),
                 default_session: name.to_owned(),
                 sessions: HashMap::from([(name.to_owned(), session())]),
                 projects: vec![],
@@ -543,6 +609,7 @@ mod tests {
         let mut config = Config {
             projects_dir: PathBuf::from("~/Projects"),
             worktrees_dir: PathBuf::from("~/.piquel/worktrees"),
+            mounts_dir: PathBuf::from("~/.piquel/mounts"),
             default_session: "default".to_owned(),
             sessions: HashMap::from([("default".to_owned(), SessionConfig { windows: vec![] })]),
             projects: vec![],

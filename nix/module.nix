@@ -23,6 +23,7 @@ let
                 pkgs.fzf
                 pkgs.git
                 pkgs.openssh
+                pkgs.sshfs
                 pkgs.tmux
               ]
             }
@@ -108,7 +109,7 @@ in
               options = {
                 name = mkOption {
                   type = types.str;
-                  description = "Machine name used by piquel's -m/--machine flag.";
+                  description = "Machine name passed to piquel's mount commands.";
                 };
                 address = mkOption {
                   type = types.str;
@@ -132,6 +133,12 @@ in
               type = types.str;
               default = "~/.piquel/worktrees";
               description = "Default directory for managed project worktrees.";
+            };
+
+            mounts_dir = mkOption {
+              type = types.str;
+              default = "~/.piquel/mounts";
+              description = "Local directory for managed SSHFS workspace mounts.";
             };
 
             default_session = mkOption {

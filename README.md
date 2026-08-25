@@ -11,6 +11,11 @@ session or project interactively.
 - `tmux` for session commands
 - `fzf` for `piquel pick`
 - `git` when using project worktree selection
+- `ssh` when using SSHFS mount commands with a configured machine
+- `sshfs` for managed remote workspace mounts
+- macOS mount users also need macFUSE installed and approved in macOS System
+  Settings; nix-darwin can provide `sshfs`, but not the approved macFUSE
+  runtime
 
 ## Install
 
@@ -47,6 +52,9 @@ piquel pick [project] [--session <template>]
 piquel project list
 piquel project load <project> [--session <template>] [--worktree <branch>]
 piquel session [path] [--session <template>] [--name <tmux-name>]
+piquel mount <machine> [project] [--worktree <branch>] [--repair]
+piquel mounts <machine>
+piquel unmount <machine> [project] [--worktree <branch>] [--all] [--stale] [--repair]
 ```
 
 `piquel completions <shell>` prints shell completions for `bash`, `fish`, or
@@ -64,9 +72,8 @@ tmux sessions and configured projects, lets `fzf` select one, then attaches to
 the session or opens the project branch workflow. `piquel pick <project>` skips
 the first picker and opens that project's branch workflow directly.
 
-All commands operate on the local machine. The config file may still contain
-`machines` entries, but they are only parsed and validated as configuration
-data; command dispatch does not use them.
+Non-mount commands operate on the local machine. `machines` entries are used
+only by SSHFS mount commands.
 
 The branch picker lists local git branches only. It does not fetch and does not
 create remote-tracking branches. If the selected branch already has a worktree,
@@ -90,6 +97,29 @@ opens the configured project path with tmux session name `project`.
 `piquel session` opens an arbitrary directory with a configured session
 template. If no path is given, it uses the current working directory. If no
 name is given, it derives the tmux session name from the directory name.
+
+`piquel mount <machine>` mounts a selected remote project or existing git
+worktree onto the local machine with SSHFS and prints the local mount path.
+With no project argument, it opens a project picker followed by a workspace
+picker containing `main` and existing remote worktrees from
+`git worktree list --porcelain`. `piquel mount <machine> <project>` mounts
+the configured project checkout directly. `--worktree <branch>` mounts an
+existing remote worktree for that branch and fails if no such worktree is
+registered. Mount commands do not clone projects, create worktrees, or run
+session commands.
+
+Managed mount paths live under `<mounts_dir>/<machine>/<project>`, for example
+`~/.piquel/mounts/pi/piquel-cli/main`. Branch worktree mount paths include a
+sanitized branch name plus a short hash of the remote path to avoid collisions.
+The remote Linux filesystem remains the source of truth; the local path is a
+live SSHFS view.
+
+`piquel mounts <machine>` lists known managed mounts using local state plus
+the OS mount table. It does not read inside mounted directories. `piquel
+unmount <machine>` opens a picker over known mounts, `--all` unmounts all known
+mounts for the machine, and `--stale` removes state records whose mountpoint is
+missing or no longer mounted. `mount --repair` unmounts a matching existing
+mount first, then mounts it again.
 
 ## Configuration
 
@@ -116,6 +146,7 @@ Fuller project config:
 {
   "projects_dir": "~/Projects",
   "worktrees_dir": "~/.piquel/worktrees",
+  "mounts_dir": "~/.piquel/mounts",
   "default_session": "default",
   "sessions": {
     "default": {
@@ -178,14 +209,16 @@ Fields:
   Defaults to `~/Projects`.
 - `worktrees_dir`: base directory for managed branch worktrees. Defaults to
   `~/.piquel/worktrees`.
+- `mounts_dir`: local base directory for managed SSHFS mounts. Defaults to
+  `~/.piquel/mounts`.
 - `default_session`: the session template used when a project does not specify
   one. Defaults to `default`.
 - `sessions`: named tmux session templates. Each template must have at least
   one window.
 - `projects`: configured repositories. The project name is derived from the
   repository basename unless `name` is set.
-- `machines`: configured machine records. They are validated and preserved in
-  the schema, but commands do not currently use them.
+- `machines`: configured machine records. Mount commands use `name` from the
+  machine argument, while `address` and `username` form the SSH target.
 - `projects[].path`: explicit project path. Defaults to
   `<projects_dir>/<project-name>`.
 - `projects[].default_session`: either the name of a global session template or

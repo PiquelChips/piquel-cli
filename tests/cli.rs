@@ -128,6 +128,11 @@ fn prepend_path(bin: &Path) -> std::ffi::OsString {
     std::env::join_paths(paths).expect("test PATH should be valid")
 }
 
+fn path_with_basic_system_bins(bin: &Path) -> std::ffi::OsString {
+    std::env::join_paths([bin, Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("test PATH should be valid")
+}
+
 fn fake_tmux_script(log: &Path, list_sessions: &str) -> String {
     format!(
         r#"#!{}
@@ -173,6 +178,73 @@ fn machine_config(address: &str) -> String {
                 }}
             ],"#,
         serde_json::to_string(address).expect("address should serialize")
+    )
+}
+
+fn fake_ssh_eval_script(log: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+remote_bin=$(dirname "$0")
+PATH="$remote_bin:$PATH"
+export PATH
+tty_flag=$1
+shift
+if [ "$1" = "--" ]; then
+    shift
+fi
+target=$1
+cmd=$2
+printf 'tty=%s\ntarget=%s\ncmd=%s\n' "$tty_flag" "$target" "$cmd" >> "$log"
+sh -c "$cmd"
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log))
+    )
+}
+
+fn fake_ssh_eval_script_with_home(log: &Path, home: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+remote_home={}
+remote_bin=$(dirname "$0")
+PATH="$remote_bin:$PATH"
+export PATH
+tty_flag=$1
+shift
+if [ "$1" = "--" ]; then
+    shift
+fi
+target=$1
+cmd=$2
+printf 'tty=%s\ntarget=%s\ncmd=%s\n' "$tty_flag" "$target" "$cmd" >> "$log"
+case "$cmd" in
+    *HOME*)
+        printf '%s\n' "$remote_home"
+        exit 0
+        ;;
+esac
+sh -c "$cmd"
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log)),
+        shell_quote(path_str(home))
+    )
+}
+
+fn fake_remote_sh_script() -> String {
+    format!(
+        r#"#!{}
+if [ "$1" = "-lc" ]; then
+    shift
+    exec {} -c "$@"
+fi
+exec {} "$@"
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(&shell_path())),
+        shell_quote(path_str(&shell_path()))
     )
 }
 
@@ -372,6 +444,63 @@ fn config_for_alpha_project(
     )
 }
 
+fn config_for_remote_mounts(temp: &TestDir, project_path: &Path, mounts_dir: &Path) -> PathBuf {
+    write_config(
+        temp,
+        &format!(
+            r#"{{
+                "projects_dir": "/tmp/projects",
+                "worktrees_dir": "/tmp/worktrees",
+                "mounts_dir": {},
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": [] }}] }}
+                }},
+                {}
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git",
+                        "path": {}
+                    }}
+                ]
+            }}"#,
+            serde_json::to_string(path_str(mounts_dir)).expect("path should serialize"),
+            machine_config("pi.example.test"),
+            serde_json::to_string(path_str(project_path)).expect("path should serialize")
+        ),
+    )
+}
+
+fn config_for_remote_mounts_with_projects_dir(
+    temp: &TestDir,
+    projects_dir: &str,
+    mounts_dir: &Path,
+) -> PathBuf {
+    write_config(
+        temp,
+        &format!(
+            r#"{{
+                "projects_dir": {},
+                "worktrees_dir": "/tmp/worktrees",
+                "mounts_dir": {},
+                "default_session": "default",
+                "sessions": {{
+                    "default": {{ "windows": [{{ "commands": [] }}] }}
+                }},
+                {}
+                "projects": [
+                    {{
+                        "repository": "https://github.com/owner/alpha.git"
+                    }}
+                ]
+            }}"#,
+            serde_json::to_string(projects_dir).expect("path should serialize"),
+            serde_json::to_string(path_str(mounts_dir)).expect("path should serialize"),
+            machine_config("pi.example.test")
+        ),
+    )
+}
+
 fn config_for_session_commands(temp: &TestDir, commands: &[&str]) -> PathBuf {
     let commands = commands
         .iter()
@@ -391,6 +520,59 @@ fn config_for_session_commands(temp: &TestDir, commands: &[&str]) -> PathBuf {
                 "projects": []
             }}"#
         ),
+    )
+}
+
+fn fake_sshfs_script(log: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+printf 'argc=%s\n' "$#" >> "$log"
+for arg in "$@"; do
+    printf '[%s]\n' "$arg" >> "$log"
+done
+exit 0
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log))
+    )
+}
+
+fn fake_mount_script(output: &str, log: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+printf 'mount\n' >> "$log"
+cat <<'EOF'
+{}EOF
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log)),
+        output
+    )
+}
+
+fn fake_fusermount_script(log: &Path) -> String {
+    format!(
+        r#"#!{}
+log={}
+printf '%s\n' "$*" >> "$log"
+exit 0
+"#,
+        path_str(&shell_path()),
+        shell_quote(path_str(log))
+    )
+}
+
+fn fake_dirname_script() -> String {
+    format!(
+        r#"#!{}
+case "$1" in
+    */*) printf '%s\n' "${{1%/*}}" ;;
+    *) printf '.\n' ;;
+esac
+"#,
+        path_str(&shell_path())
     )
 }
 
@@ -465,6 +647,359 @@ fn config_flag_takes_precedence_over_environment() {
         .expect("piquel should run");
 
     assert_success(&output, "alpha\nzeta\n", "");
+}
+
+#[test]
+fn global_machine_flag_is_rejected() {
+    let temp = TestDir::new();
+    let config = config_with_projects(&temp);
+
+    let output = piquel()
+        .args([
+            "--config",
+            path_str(&config),
+            "--machine",
+            "pi",
+            "project",
+            "list",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(&output, &["unexpected argument '--machine'"]);
+}
+
+#[test]
+fn mount_without_machine_fails_before_running_sshfs() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote/alpha");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let config = config_for_remote_mounts(&temp, &project_path, &mounts_dir);
+    let sshfs_log = temp.path().join("sshfs.log");
+    let bin = bin_dir_with(&temp, &[("sshfs", fake_sshfs_script(&sshfs_log))]);
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "mount"])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(&output, &["required arguments", "<MACHINE>"]);
+    assert!(!sshfs_log.exists(), "sshfs should not be invoked");
+}
+
+#[test]
+fn mount_unknown_machine_fails_before_running_sshfs() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote/alpha");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let config = config_for_remote_mounts(&temp, &project_path, &mounts_dir);
+    let sshfs_log = temp.path().join("sshfs.log");
+    let bin = bin_dir_with(&temp, &[("sshfs", fake_sshfs_script(&sshfs_log))]);
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "mount", "missing", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(&output, &["Machine \"missing\" is not configured"]);
+    assert!(!sshfs_log.exists(), "sshfs should not be invoked");
+}
+
+#[test]
+fn mount_project_invokes_remote_validation_local_sshfs_and_writes_state() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote/alpha");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let config = config_for_remote_mounts(&temp, &project_path, &mounts_dir);
+    let ssh_log = temp.path().join("ssh.log");
+    let sshfs_log = temp.path().join("sshfs.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("ssh", fake_ssh_eval_script(&ssh_log)),
+            ("sh", fake_remote_sh_script()),
+            ("sshfs", fake_sshfs_script(&sshfs_log)),
+        ],
+    );
+    let expected_mount = mounts_dir.join("pi/alpha/main");
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "mount", "pi", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, &format!("{}\n", expected_mount.display()), "");
+    let ssh_log = fs::read_to_string(ssh_log).expect("ssh log should be readable");
+    assert!(
+        ssh_log.contains("test -e"),
+        "remote project path should be validated"
+    );
+    let sshfs_log = fs::read_to_string(sshfs_log).expect("sshfs log should be readable");
+    assert!(sshfs_log.contains("[reconnect]"));
+    assert!(sshfs_log.contains("[delay_connect]"));
+    assert!(sshfs_log.contains("[idmap=user]"));
+    assert!(sshfs_log.contains("[dir_cache=no]"));
+    assert!(sshfs_log.contains(&format!(
+        "[ronan@pi.example.test:{}]",
+        project_path.display()
+    )));
+    assert!(sshfs_log.contains(&format!("[{}]", expected_mount.display())));
+    let state =
+        fs::read_to_string(mounts_dir.join(".state.json")).expect("mount state should be written");
+    assert!(state.contains("\"project\": \"alpha\""));
+    assert!(state.contains("\"Main\""));
+}
+
+#[test]
+fn mount_project_expands_projects_dir_against_remote_home() {
+    let temp = TestDir::new();
+    let remote_home = temp.path().join("remote-home");
+    let project_path = remote_home.join("Projects/alpha");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let config = config_for_remote_mounts_with_projects_dir(&temp, "~/Projects", &mounts_dir);
+    let ssh_log = temp.path().join("ssh.log");
+    let sshfs_log = temp.path().join("sshfs.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            (
+                "ssh",
+                fake_ssh_eval_script_with_home(&ssh_log, &remote_home),
+            ),
+            ("sh", fake_remote_sh_script()),
+            ("sshfs", fake_sshfs_script(&sshfs_log)),
+        ],
+    );
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "mount", "pi", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(
+        &output,
+        &format!("{}\n", mounts_dir.join("pi/alpha/main").display()),
+        "",
+    );
+    let sshfs_log = fs::read_to_string(sshfs_log).expect("sshfs log should be readable");
+    assert!(sshfs_log.contains(&format!(
+        "[ronan@pi.example.test:{}]",
+        project_path.display()
+    )));
+}
+
+#[test]
+fn mount_reports_missing_local_sshfs() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote/alpha");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let config = config_for_remote_mounts(&temp, &project_path, &mounts_dir);
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("ssh", fake_ssh_eval_script(&ssh_log)),
+            ("sh", fake_remote_sh_script()),
+            ("dirname", fake_dirname_script()),
+        ],
+    );
+
+    let output = piquel()
+        .env("PATH", path_with_basic_system_bins(&bin))
+        .args(["--config", path_str(&config), "mount", "pi", "alpha"])
+        .output()
+        .expect("piquel should run");
+
+    assert_failure(
+        &output,
+        &["sshfs is not installed or not available in PATH"],
+    );
+}
+
+#[test]
+fn mount_project_worktree_uses_existing_branch_worktree() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote/alpha");
+    let branch_path = temp.path().join("remote/alpha-feature");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    fs::create_dir_all(&branch_path).expect("remote worktree should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let config = config_for_remote_mounts(&temp, &project_path, &mounts_dir);
+    let ssh_log = temp.path().join("ssh.log");
+    let sshfs_log = temp.path().join("sshfs.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            ("ssh", fake_ssh_eval_script(&ssh_log)),
+            ("sh", fake_remote_sh_script()),
+            ("git", fake_git_worktree_script(&project_path, &branch_path)),
+            ("sshfs", fake_sshfs_script(&sshfs_log)),
+        ],
+    );
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args([
+            "--config",
+            path_str(&config),
+            "mount",
+            "pi",
+            "alpha",
+            "-t",
+            "feature/foo",
+        ])
+        .output()
+        .expect("piquel should run");
+
+    assert!(
+        output.status.success(),
+        "mount worktree should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("/branches/feature-foo-"));
+    let sshfs_log = fs::read_to_string(sshfs_log).expect("sshfs log should be readable");
+    assert!(sshfs_log.contains(&format!(
+        "[ronan@pi.example.test:{}]",
+        branch_path.display()
+    )));
+}
+
+#[test]
+fn mounts_reads_state_and_mount_table_without_ssh() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote/alpha");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let mount_path = mounts_dir.join("pi/alpha/main");
+    fs::create_dir_all(&mount_path).expect("mount point should exist");
+    let config = config_for_remote_mounts(&temp, &project_path, &mounts_dir);
+    fs::create_dir_all(&mounts_dir).expect("mounts dir should exist");
+    fs::write(
+        mounts_dir.join(".state.json"),
+        format!(
+            r#"{{
+  "mounts": [
+    {{
+      "machine": "pi",
+      "project": "alpha",
+      "workspace": "Main",
+      "target": {{ "username": "ronan", "host": "pi.example.test" }},
+      "remote_path": {},
+      "mount_path": {}
+    }}
+  ]
+}}"#,
+            serde_json::to_string(path_str(&project_path)).expect("path should serialize"),
+            serde_json::to_string(path_str(&mount_path)).expect("path should serialize")
+        ),
+    )
+    .expect("state should be written");
+    let mount_log = temp.path().join("mount.log");
+    let ssh_log = temp.path().join("ssh.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            (
+                "mount",
+                fake_mount_script(
+                    &format!(
+                        "ronan@pi.example.test:{} on {} (macfuse, nodev)\n",
+                        project_path.display(),
+                        mount_path.display()
+                    ),
+                    &mount_log,
+                ),
+            ),
+            ("ssh", fake_ssh_eval_script(&ssh_log)),
+        ],
+    );
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "mounts", "pi"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(
+        &output,
+        &format!("mounted\tmain\talpha\t{}\n", mount_path.display()),
+        "",
+    );
+    assert!(mount_log.exists(), "mount table should be read");
+    assert!(!ssh_log.exists(), "mounts listing should not invoke ssh");
+}
+
+#[test]
+fn unmount_all_invokes_fuse_unmount_and_removes_state() {
+    let temp = TestDir::new();
+    let project_path = temp.path().join("remote/alpha");
+    fs::create_dir_all(&project_path).expect("remote project should exist");
+    let mounts_dir = temp.path().join("mounts");
+    let mount_path = mounts_dir.join("pi/alpha/main");
+    fs::create_dir_all(&mount_path).expect("mount point should exist");
+    let config = config_for_remote_mounts(&temp, &project_path, &mounts_dir);
+    fs::create_dir_all(&mounts_dir).expect("mounts dir should exist");
+    fs::write(
+        mounts_dir.join(".state.json"),
+        format!(
+            r#"{{
+  "mounts": [
+    {{
+      "machine": "pi",
+      "project": "alpha",
+      "workspace": "Main",
+      "target": {{ "username": "ronan", "host": "pi.example.test" }},
+      "remote_path": {},
+      "mount_path": {}
+    }}
+  ]
+}}"#,
+            serde_json::to_string(path_str(&project_path)).expect("path should serialize"),
+            serde_json::to_string(path_str(&mount_path)).expect("path should serialize")
+        ),
+    )
+    .expect("state should be written");
+    let mount_log = temp.path().join("mount.log");
+    let unmount_log = temp.path().join("unmount.log");
+    let bin = bin_dir_with(
+        &temp,
+        &[
+            (
+                "mount",
+                fake_mount_script(
+                    &format!(
+                        "fuse.sshfs {} type fuse.sshfs (rw,nosuid,nodev)\n",
+                        mount_path.display()
+                    ),
+                    &mount_log,
+                ),
+            ),
+            ("fusermount3", fake_fusermount_script(&unmount_log)),
+        ],
+    );
+
+    let output = piquel()
+        .env("PATH", prepend_path(&bin))
+        .args(["--config", path_str(&config), "unmount", "pi", "--all"])
+        .output()
+        .expect("piquel should run");
+
+    assert_success(&output, "", "");
+    let unmount_log = fs::read_to_string(unmount_log).expect("unmount log should be readable");
+    assert_eq!(unmount_log, format!("-u {}\n", mount_path.display()));
+    let state =
+        fs::read_to_string(mounts_dir.join(".state.json")).expect("mount state should be readable");
+    assert!(state.contains("\"mounts\": []"));
 }
 
 #[test]
