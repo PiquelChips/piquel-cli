@@ -196,7 +196,10 @@ pub fn run() -> Result<()> {
         Commands::List => state.list(),
         Commands::Pick { project, session } => state.pick(project.as_deref(), session.as_deref()),
         Commands::Project { command } => match command {
-            ProjectCommands::List => Ok(state.list_projects()),
+            ProjectCommands::List => {
+                state.list_projects();
+                Ok(())
+            }
             ProjectCommands::Load {
                 project,
                 session,
