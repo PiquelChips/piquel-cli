@@ -9,6 +9,7 @@ pkgs.mkShell {
         rust-analyzer
         fzf
         git
+        sshfs
         tmux
     ];
 }

@@ -23,6 +23,7 @@ let
                 pkgs.fzf
                 pkgs.git
                 pkgs.openssh
+                pkgs.sshfs
                 pkgs.tmux
               ]
             }
@@ -108,7 +109,7 @@ in
               options = {
                 name = mkOption {
                   type = types.str;
-                  description = "Machine name used by piquel's -m/--machine flag.";
+                  description = "Machine name passed to piquel's mount commands.";
                 };
                 address = mkOption {
                   type = types.str;

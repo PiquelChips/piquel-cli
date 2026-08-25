@@ -18,6 +18,9 @@ pub enum ConfigError {
     /// A local command operation failed while normalizing config.
     #[error("{0}")]
     Command(#[from] crate::command::CommandError),
+    /// A mount-specific operation failed while normalizing config.
+    #[error("{0}")]
+    Mount(#[from] crate::mount::MountError),
 }
 
 /// Loads the JSON config from `config_path`.
